@@ -1,13 +1,15 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models.analyse import Analyse
 from app.models.vertrag import Vertrag
 from app.schemas.analyse import AnalyseResponse
+from app.discovery.orchestrator import run_discovery
 
 router = APIRouter(prefix="/analysen", tags=["Analysen"])
 
@@ -38,5 +40,15 @@ async def analyse_starten(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_
     db.add(analyse)
     await db.commit()
     await db.refresh(analyse)
-    # TODO: trigger background discovery pipeline here
+
+    # Launch discovery pipeline as background task with its own DB session
+    analyse_id = analyse.id
+    asyncio.create_task(_run_discovery_background(analyse_id))
+
     return analyse
+
+
+async def _run_discovery_background(analyse_id: uuid.UUID) -> None:
+    """Run discovery in background with a fresh DB session."""
+    async with async_session() as db:
+        await run_discovery(analyse_id, db)

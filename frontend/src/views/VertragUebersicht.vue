@@ -2,14 +2,20 @@
   <div>
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
       <h1>Vertragsübersicht</h1>
-      <label style="background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
-        Hochladen
-        <input type="file" accept=".pdf,.docx,.doc,.txt" style="display: none" @change="hochladen" />
-      </label>
+      <div style="display: flex; gap: 0.5rem;">
+        <button style="background: #6366f1; color: white;" @click="demoLaden">Demo-Vertrag laden</button>
+        <label style="background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
+          Hochladen
+          <input type="file" accept=".pdf,.docx,.doc,.txt" style="display: none" @change="hochladen" />
+        </label>
+      </div>
     </div>
 
     <div v-if="fehler" style="background: #fef2f2; color: #dc2626; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem;">
       {{ fehler }}
+    </div>
+    <div v-if="erfolg" style="background: #f0fdf4; color: #16a34a; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem;">
+      {{ erfolg }}
     </div>
 
     <table v-if="vertraege.length > 0">
@@ -38,7 +44,7 @@
     </table>
 
     <div v-else style="background: white; padding: 2rem; border-radius: 6px; text-align: center; color: #6b7280;">
-      Noch keine Verträge hochgeladen.
+      Noch keine Verträge hochgeladen. Nutze "Demo-Vertrag laden" zum Testen.
     </div>
   </div>
 </template>
@@ -51,6 +57,7 @@ import type { Vertrag } from "../types";
 
 const vertraege = ref<Vertrag[]>([]);
 const fehler = ref("");
+const erfolg = ref("");
 
 async function laden() {
   try {
@@ -70,12 +77,24 @@ async function hochladen(event: Event) {
   form.append("datei", datei);
 
   try {
+    fehler.value = "";
     await api.post("/vertraege", form);
     await laden();
   } catch {
     fehler.value = "Hochladen fehlgeschlagen.";
   }
   input.value = "";
+}
+
+async function demoLaden() {
+  try {
+    fehler.value = "";
+    await api.post("/demo/vertrag-anlegen");
+    erfolg.value = "Demo-Vertrag erfolgreich angelegt.";
+    await laden();
+  } catch {
+    fehler.value = "Demo-Vertrag konnte nicht angelegt werden.";
+  }
 }
 
 async function loeschen(id: string) {
@@ -89,7 +108,10 @@ async function loeschen(id: string) {
 }
 
 function datum(iso: string): string {
-  return new Date(iso).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleDateString("de-DE", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
 onMounted(laden);

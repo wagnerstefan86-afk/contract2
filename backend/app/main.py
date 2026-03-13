@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -5,6 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app.api.router import api_router
+
+# Configure logging so discovery pipeline output is visible
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager

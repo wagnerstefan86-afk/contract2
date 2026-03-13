@@ -1,0 +1,105 @@
+Rahmenvertrag über IT-Dienstleistungen
+
+zwischen
+
+MegaCorp AG, Musterstraße 1, 60311 Frankfurt am Main
+(nachfolgend "Auftraggeber")
+
+und
+
+IT-Service GmbH, Technikweg 42, 80331 München
+(nachfolgend "Auftragnehmer")
+
+1. Vertragsgegenstand und Leistungsumfang
+
+Der Auftragnehmer erbringt für den Auftraggeber IT-Dienstleistungen im Bereich Anwendungsbetrieb, Infrastruktur und Support gemäß den in Anlage 1 beschriebenen Leistungen sowie alle damit zusammenhängenden Tätigkeiten, die zur Erreichung des Vertragszwecks erforderlich sind.
+
+Der Auftragnehmer stellt sicher, dass alle Leistungen dem Stand der Technik entsprechen und die einschlägigen gesetzlichen und regulatorischen Anforderungen erfüllen. Maßgeblich sind dabei die jeweils aktuellen Fassungen der relevanten Normen und Standards.
+
+2. Verfügbarkeit und Service Level
+
+Der Auftragnehmer gewährleistet eine Verfügbarkeit der betriebenen Systeme von 99,95% gemessen auf Monatsbasis (24x7x365). Geplante Wartungsfenster sind mit dem Auftraggeber mindestens 10 Werktage im Voraus abzustimmen und gelten nicht als Ausfallzeit, sofern sie außerhalb der Geschäftszeiten (Mo-Fr 06:00-22:00 Uhr) liegen.
+
+Bei Unterschreitung der vereinbarten Verfügbarkeit gelten folgende Vertragsstrafen:
+- 99,9% bis 99,95%: 5% der monatlichen Vergütung
+- 99,5% bis 99,9%: 10% der monatlichen Vergütung
+- unter 99,5%: 20% der monatlichen Vergütung
+
+Die Vertragsstrafe ist nicht auf den Gesamtschaden anzurechnen. Weitergehende Schadensersatzansprüche bleiben unberührt.
+
+3. Reaktions- und Wiederherstellungszeiten
+
+Für Störungen gelten folgende Reaktionszeiten ab Meldungseingang:
+- Priorität 1 (Totalausfall): Reaktion innerhalb von 15 Minuten, Wiederherstellung innerhalb von 2 Stunden
+- Priorität 2 (wesentliche Einschränkung): Reaktion innerhalb von 30 Minuten, Wiederherstellung innerhalb von 4 Stunden
+- Priorität 3 (Einschränkung): Reaktion innerhalb von 2 Stunden, Wiederherstellung am nächsten Werktag
+
+Die Prioritätseinstufung erfolgt ausschließlich durch den Auftraggeber.
+
+4. Informationssicherheit
+
+Der Auftragnehmer verpflichtet sich, ein Informationssicherheits-Managementsystem (ISMS) gemäß ISO 27001 zu betreiben und die Zertifizierung während der gesamten Vertragslaufzeit aufrechtzuerhalten. Die Zertifizierung ist dem Auftraggeber jährlich unaufgefordert nachzuweisen.
+
+Alle Daten des Auftraggebers sind nach dem aktuellen Stand der Technik zu verschlüsseln, sowohl bei der Übertragung als auch bei der Speicherung. Der Auftragnehmer setzt dabei mindestens die Vorgaben des BSI-Grundschutzkompendiums um.
+
+Sicherheitsvorfälle sind dem Auftraggeber unverzüglich, spätestens jedoch innerhalb von 4 Stunden nach Kenntniserlangung, zu melden. Der Auftragnehmer stellt auf eigene Kosten ein Incident-Response-Team bereit, das innerhalb von 30 Minuten nach einem Sicherheitsvorfall vollständig einsatzbereit ist.
+
+5. Business Continuity und Disaster Recovery
+
+Der Auftragnehmer unterhält einen Business-Continuity-Plan und einen Disaster-Recovery-Plan, die mindestens halbjährlich getestet werden. Der Auftraggeber ist berechtigt, an diesen Tests teilzunehmen.
+
+Im Katastrophenfall gewährleistet der Auftragnehmer die Wiederherstellung aller Systeme innerhalb eines RTO von 4 Stunden und eines RPO von 1 Stunde. Die dafür erforderliche Infrastruktur (georedundantes Rechenzentrum) wird vom Auftragnehmer auf eigene Kosten vorgehalten.
+
+6. Compliance und Regulatorik
+
+Der Auftragnehmer stellt sicher, dass seine Leistungserbringung sämtlichen für den Auftraggeber geltenden regulatorischen Anforderungen entspricht, insbesondere DORA, NIS2, BAIT, DSGVO und den jeweils aktuellen Rundschreiben der BaFin.
+
+Änderungen regulatorischer Anforderungen sind vom Auftragnehmer auf eigene Kosten und ohne gesonderte Vergütung umzusetzen, sofern sie die vertragsgegenständlichen Leistungen betreffen.
+
+Der Auftragnehmer verpflichtet sich, alle einschlägigen Zertifizierungen und Nachweise vorzuhalten und dem Auftraggeber auf Anforderung innerhalb von 5 Werktagen vorzulegen.
+
+7. Audit und Prüfungsrechte
+
+Der Auftraggeber sowie von ihm beauftragte Dritte sind berechtigt, die Einhaltung der vertraglichen Vereinbarungen jederzeit und auch ohne Vorankündigung zu prüfen. Dies umfasst auch Vor-Ort-Prüfungen in den Räumlichkeiten des Auftragnehmers.
+
+Der Auftragnehmer gewährt den Prüforganen des Auftraggebers sowie der Bundesanstalt für Finanzdienstleistungsaufsicht (BaFin) und deren Beauftragten uneingeschränkten Zugang zu allen relevanten Unterlagen, Systemen und Räumlichkeiten. Die Kosten der Prüfung trägt der Auftragnehmer.
+
+Der Auftragnehmer erstellt monatlich einen umfassenden Compliance-Bericht gemäß den Vorgaben des Auftraggebers. Format, Umfang und Detailtiefe werden vom Auftraggeber festgelegt und können jederzeit angepasst werden.
+
+8. Haftung und Gewährleistung
+
+Der Auftragnehmer haftet unbeschränkt für alle Schäden, die aus der Verletzung vertraglicher Pflichten entstehen. Eine Beschränkung der Haftung auf leichte Fahrlässigkeit wird ausgeschlossen.
+
+Der Auftragnehmer stellt den Auftraggeber von allen Ansprüchen Dritter frei, die im Zusammenhang mit der Leistungserbringung des Auftragnehmers entstehen. Dies umfasst auch Ansprüche, die aus der Verletzung von Schutzrechten Dritter resultieren.
+
+Der Auftragnehmer schließt eine Berufshaftpflichtversicherung mit einer Deckungssumme von mindestens 10 Millionen Euro je Schadensfall ab und weist diese dem Auftraggeber jährlich nach.
+
+9. Personal
+
+Der Auftragnehmer setzt ausschließlich qualifiziertes Personal ein, das über die erforderlichen Zertifizierungen und Sicherheitsüberprüfungen verfügt. Schlüsselpersonal darf nur mit vorheriger schriftlicher Zustimmung des Auftraggebers ausgetauscht werden.
+
+Der Auftraggeber behält sich vor, den Austausch einzelner Mitarbeiter des Auftragnehmers ohne Angabe von Gründen zu verlangen. Der Auftragnehmer hat innerhalb von 10 Werktagen gleichwertigen Ersatz zu stellen.
+
+10. Vertragslaufzeit und Kündigung
+
+Der Vertrag hat eine Mindestlaufzeit von 60 Monaten. Er verlängert sich jeweils automatisch um weitere 24 Monate, wenn er nicht mit einer Frist von 12 Monaten zum Ende der jeweiligen Vertragslaufzeit gekündigt wird.
+
+Der Auftraggeber ist berechtigt, den Vertrag jederzeit aus wichtigem Grund ohne Einhaltung einer Kündigungsfrist zu kündigen. Als wichtiger Grund gilt insbesondere auch die wesentliche Änderung der Geschäftsstrategie des Auftraggebers.
+
+Bei Vertragsende ist der Auftragnehmer verpflichtet, eine vollständige Transition der Leistungen an einen Nachfolge-Dienstleister durchzuführen. Die Transition erfolgt auf Kosten des Auftragnehmers und kann bis zu 12 Monate dauern.
+
+11. Geistiges Eigentum
+
+Alle im Rahmen der Leistungserbringung entstehenden Arbeitsergebnisse, einschließlich Software, Dokumentation und Konzepte, gehen mit ihrer Entstehung in das ausschließliche Eigentum des Auftraggebers über. Der Auftragnehmer verzichtet unwiderruflich auf alle Rechte an diesen Arbeitsergebnissen.
+
+12. Subunternehmer
+
+Der Einsatz von Subunternehmern bedarf der vorherigen schriftlichen Genehmigung des Auftraggebers. Der Auftragnehmer haftet für Subunternehmer wie für eigenes Verschulden. Die vertraglichen Anforderungen einschließlich Sicherheitsanforderungen und Audit-Rechte gelten in vollem Umfang auch für Subunternehmer.
+
+13. Schlussbestimmungen
+
+Änderungen und Ergänzungen dieses Vertrages bedürfen der Schriftform. Mündliche Nebenabreden bestehen nicht. Sollten einzelne Bestimmungen unwirksam sein, wird die Wirksamkeit der übrigen Bestimmungen hiervon nicht berührt. Gerichtsstand ist Frankfurt am Main.
+
+Anlage 1: Leistungsbeschreibung (wird nachgereicht)
+Anlage 2: SLA-Definitionen (siehe separates Dokument)
+Anlage 3: Sicherheitsrichtlinien des Auftraggebers (in der jeweils aktuellen Fassung)
