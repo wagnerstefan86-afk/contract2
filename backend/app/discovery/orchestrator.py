@@ -159,6 +159,8 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     # --- Step 4: Discovery passes ---
     all_raw_findings: list[RawFinding] = []
+    # Raw findings per pass for debugging/evaluation (serialized to auswertung)
+    roh_kandidaten_pro_pass: dict[str, list[dict]] = {}
 
     # Pass 1: Breite Ersterfassung
     await _update_analyse(db, analyse, AnalyseStatus.PASS_1.value, "Breite Ersterfassung", 15)
@@ -176,6 +178,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "dauer_sekunden": dur_p1,
         "kategorien": dict(p1_cats),
     }
+
+    roh_kandidaten_pro_pass["Pass 1: Breite Ersterfassung"] = [
+        _raw_finding_to_dict(f) for f in findings_p1
+    ]
 
     await _log(db, aid, vid,
                f"Pass 1 abgeschlossen: {len(findings_p1)} Kandidaten in {dur_p1}s.",
@@ -206,6 +212,13 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "kategorien": dict(p2_cats),
     }
 
+    # Store pass 2 findings grouped by perspective sub-pass
+    for f in findings_p2:
+        pass_key = f.quelle_pass or "Pass 2: Unbekannt"
+        roh_kandidaten_pro_pass.setdefault(pass_key, []).append(
+            _raw_finding_to_dict(f)
+        )
+
     await _log(db, aid, vid,
                f"Pass 2 abgeschlossen: {len(findings_p2)} Kandidaten in {dur_p2}s.",
                details=auswertung["passes"]["pass2_perspektive"])
@@ -228,6 +241,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "dauer_sekunden": dur_p3,
         "kategorien": dict(p3_cats),
     }
+
+    roh_kandidaten_pro_pass["Pass 3: Implizite Pflichten"] = [
+        _raw_finding_to_dict(f) for f in findings_p3
+    ]
 
     await _log(db, aid, vid,
                f"Pass 3 abgeschlossen: {len(findings_p3)} Kandidaten in {dur_p3}s.",
@@ -284,6 +301,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "pass3_sekunden": dur_p3,
         "konsolidierung_sekunden": dur_cons,
     }
+    auswertung["roh_kandidaten"] = roh_kandidaten_pro_pass
 
     await _log(db, aid, vid,
                f"Konsolidierung abgeschlossen: {len(consolidated)} Fundstellen "
@@ -327,3 +345,17 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                f"(aus {total_raw} Rohkandidaten).",
                details=auswertung)
     await db.commit()
+
+
+def _raw_finding_to_dict(f: RawFinding) -> dict:
+    """Serialize a RawFinding to a JSON-safe dict for storage in auswertung."""
+    return {
+        "textstelle": f.textstelle,
+        "kategorie": f.kategorie,
+        "kurzbeschreibung": f.kurzbeschreibung,
+        "erklaerung": f.erklaerung,
+        "empfehlung": f.empfehlung,
+        "risikostufe": f.risikostufe,
+        "segment_ids": f.segment_ids,
+        "quelle_pass": f.quelle_pass,
+    }

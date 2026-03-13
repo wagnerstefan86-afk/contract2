@@ -13,6 +13,7 @@ from app.models.vertrag import Vertrag
 from app.schemas.analyse import AnalyseResponse
 from app.discovery.orchestrator import run_discovery
 from app.evaluation.evaluator import evaluiere
+from app.evaluation.miss_analyse import analysiere_misses
 
 router = APIRouter(prefix="/analysen", tags=["Analysen"])
 
@@ -115,7 +116,17 @@ async def analyse_erwartungspruefung(analyse_id: uuid.UUID, db: AsyncSession = D
     ]
 
     ergebnis = evaluiere(fundstellen_dicts)
-    return ergebnis.to_dict()
+
+    # Run miss analysis with raw candidates if available
+    roh_kandidaten = None
+    if analyse.auswertung and "roh_kandidaten" in analyse.auswertung:
+        roh_kandidaten = analyse.auswertung["roh_kandidaten"]
+
+    miss_ergebnis = analysiere_misses(ergebnis, roh_kandidaten)
+
+    result = ergebnis.to_dict()
+    result["miss_analyse"] = miss_ergebnis.to_dict()
+    return result
 
 
 @router.post("/vertrag/{vertrag_id}", response_model=AnalyseResponse, status_code=201)
