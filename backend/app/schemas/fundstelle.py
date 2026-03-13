@@ -9,6 +9,7 @@ class FundstelleResponse(BaseModel):
     analyse_id: UUID
     vertrag_id: UUID
     textstelle: str
+    absatz_ids: list | None = None
     kategorie: str
     risikostufe: str
     kurzbeschreibung: str
@@ -18,6 +19,7 @@ class FundstelleResponse(BaseModel):
     pruef_status: str
     pruef_kommentar: str | None = None
     erstellt_am: datetime
+    zusammenfuehrung: dict | None = None
 
     model_config = {"from_attributes": True}
 

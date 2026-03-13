@@ -1,30 +1,31 @@
 """Discovery orchestrator: runs the full multi-pass pipeline.
 
 Reads contract text, segments it, runs passes sequentially, consolidates,
-and persists findings + protocol entries to the database.
+and persists findings + protocol entries + evaluation data to the database.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 import uuid
+from collections import Counter
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.vertrag import Vertrag, VertragStatus
 from app.models.analyse import Analyse, AnalyseStatus
 from app.models.fundstelle import Fundstelle, PruefStatus
 from app.models.protokoll import Protokoll, ProtokollEbene
-from app.services.extraktion import text_aus_datei, normalisiere_text
+from app.services.extraktion import text_aus_datei
 from app.discovery.chunking import text_in_absaetze, absaetze_zu_segmente
 from app.discovery.llm_client import lade_llm_config, LLMConfig
 from app.discovery.passes.breit import BreitPass
 from app.discovery.passes.perspektive import PerspektivePass
 from app.discovery.passes.implizit import ImplizitPass
-from app.discovery.consolidation import konsolidiere
+from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.passes.base import RawFinding
 
 logger = logging.getLogger(__name__)
@@ -86,10 +87,14 @@ async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession) -> None:
 
 
 async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) -> None:
-    """Inner pipeline logic."""
+    """Inner pipeline logic with full observability."""
 
     vid = vertrag.id
     aid = analyse.id
+    pipeline_start = time.monotonic()
+
+    # Accumulates evaluation data for the auswertung field
+    auswertung: dict = {"passes": {}, "segmente": {}, "konsolidierung": {}, "zeiten": {}}
 
     # --- Step 1: Text extraction ---
     await _update_analyse(db, analyse, AnalyseStatus.GESTARTET.value, "Textextraktion", 5)
@@ -115,6 +120,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     if not full_text or len(full_text.strip()) < 50:
         raise ValueError("Vertrag enthält zu wenig Text für eine Analyse.")
 
+    auswertung["text_laenge"] = len(full_text)
     await db.commit()
 
     # --- Step 2: Segmentation ---
@@ -122,8 +128,16 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     absaetze = text_in_absaetze(full_text)
     vertrag.absaetze = absaetze
     segments = absaetze_zu_segmente(absaetze)
+
+    auswertung["segmente"] = {
+        "absaetze": len(absaetze),
+        "segmente": len(segments),
+        "segment_ids": [s.id for s in segments],
+    }
+
     await _log(db, aid, vid,
-               f"Segmentierung abgeschlossen: {len(absaetze)} Absätze, {len(segments)} Segmente.")
+               f"Segmentierung abgeschlossen: {len(absaetze)} Absätze, {len(segments)} Segmente.",
+               details=auswertung["segmente"])
     await db.commit()
 
     # --- Step 3: Load LLM config ---
@@ -140,7 +154,6 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     except ValueError as e:
         raise ValueError(str(e)) from e
 
-    # Update contract status
     vertrag.status = VertragStatus.IN_ANALYSE.value
     await db.commit()
 
@@ -152,10 +165,21 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await _log(db, aid, vid, "Pass 1: Breite Ersterfassung gestartet.")
     await db.commit()
 
+    t0 = time.monotonic()
     pass1 = BreitPass()
     findings_p1 = await pass1.run(segments, llm_config, full_text)
+    dur_p1 = round(time.monotonic() - t0, 1)
+
+    p1_cats = Counter(f.kategorie for f in findings_p1)
+    auswertung["passes"]["pass1_breit"] = {
+        "kandidaten": len(findings_p1),
+        "dauer_sekunden": dur_p1,
+        "kategorien": dict(p1_cats),
+    }
+
     await _log(db, aid, vid,
-               f"Pass 1 abgeschlossen: {len(findings_p1)} Kandidaten gefunden.")
+               f"Pass 1 abgeschlossen: {len(findings_p1)} Kandidaten in {dur_p1}s.",
+               details=auswertung["passes"]["pass1_breit"])
     all_raw_findings.extend(findings_p1)
     await db.commit()
 
@@ -164,10 +188,27 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await _log(db, aid, vid, "Pass 2: Perspektivische Vertiefung gestartet (5 Perspektiven).")
     await db.commit()
 
+    t0 = time.monotonic()
     pass2 = PerspektivePass()
     findings_p2 = await pass2.run(segments, llm_config, full_text)
+    dur_p2 = round(time.monotonic() - t0, 1)
+
+    # Break down pass 2 by perspective
+    p2_by_perspective: dict[str, int] = {}
+    for f in findings_p2:
+        p2_by_perspective[f.quelle_pass] = p2_by_perspective.get(f.quelle_pass, 0) + 1
+
+    p2_cats = Counter(f.kategorie for f in findings_p2)
+    auswertung["passes"]["pass2_perspektive"] = {
+        "kandidaten": len(findings_p2),
+        "dauer_sekunden": dur_p2,
+        "pro_perspektive": p2_by_perspective,
+        "kategorien": dict(p2_cats),
+    }
+
     await _log(db, aid, vid,
-               f"Pass 2 abgeschlossen: {len(findings_p2)} zusätzliche Kandidaten.")
+               f"Pass 2 abgeschlossen: {len(findings_p2)} Kandidaten in {dur_p2}s.",
+               details=auswertung["passes"]["pass2_perspektive"])
     all_raw_findings.extend(findings_p2)
     await db.commit()
 
@@ -176,25 +217,83 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await _log(db, aid, vid, "Pass 3: Implizite Pflichten gestartet.")
     await db.commit()
 
+    t0 = time.monotonic()
     pass3 = ImplizitPass()
     findings_p3 = await pass3.run(segments, llm_config, full_text)
+    dur_p3 = round(time.monotonic() - t0, 1)
+
+    p3_cats = Counter(f.kategorie for f in findings_p3)
+    auswertung["passes"]["pass3_implizit"] = {
+        "kandidaten": len(findings_p3),
+        "dauer_sekunden": dur_p3,
+        "kategorien": dict(p3_cats),
+    }
+
     await _log(db, aid, vid,
-               f"Pass 3 abgeschlossen: {len(findings_p3)} zusätzliche Kandidaten.")
+               f"Pass 3 abgeschlossen: {len(findings_p3)} Kandidaten in {dur_p3}s.",
+               details=auswertung["passes"]["pass3_implizit"])
     all_raw_findings.extend(findings_p3)
     await db.commit()
 
     # --- Step 5: Consolidation ---
     await _update_analyse(db, analyse, AnalyseStatus.KONSOLIDIERUNG.value, "Konsolidierung", 85)
+    total_raw = len(all_raw_findings)
     await _log(db, aid, vid,
-               f"Konsolidierung gestartet: {len(all_raw_findings)} Gesamtkandidaten.")
+               f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus 3 Passes.")
     await db.commit()
 
+    t0 = time.monotonic()
     consolidated = konsolidiere(all_raw_findings)
-    await _log(db, aid, vid,
-               f"Konsolidierung abgeschlossen: {len(consolidated)} Fundstellen nach Deduplizierung.")
+    dur_cons = round(time.monotonic() - t0, 1)
 
-    # --- Step 6: Persist findings ---
-    for raw in consolidated:
+    # Build consolidation stats
+    merged_count = sum(1 for c in consolidated if c.raw_count > 1)
+    solo_count = sum(1 for c in consolidated if c.raw_count == 1)
+    max_merge = max((c.raw_count for c in consolidated), default=0)
+
+    # Category distribution after consolidation
+    final_cats = Counter(c.finding.kategorie for c in consolidated)
+    final_risk = Counter(c.finding.risikostufe for c in consolidated)
+
+    # Source pass distribution after consolidation
+    source_pass_dist: dict[str, int] = {}
+    for c in consolidated:
+        for part in c.finding.quelle_pass.split(", "):
+            cleaned = part.strip()
+            if cleaned:
+                source_pass_dist[cleaned] = source_pass_dist.get(cleaned, 0) + 1
+
+    auswertung["konsolidierung"] = {
+        "roh_gesamt": total_raw,
+        "nach_konsolidierung": len(consolidated),
+        "entfernte_duplikate": total_raw - len(consolidated),
+        "zusammengefuehrt": merged_count,
+        "unveraendert": solo_count,
+        "max_zusammenfuehrungen": max_merge,
+        "dauer_sekunden": dur_cons,
+    }
+    auswertung["ergebnis"] = {
+        "fundstellen_gesamt": len(consolidated),
+        "kategorien": dict(final_cats),
+        "risikostufen": dict(final_risk),
+        "quellen_verteilung": source_pass_dist,
+    }
+    auswertung["zeiten"] = {
+        "pass1_sekunden": dur_p1,
+        "pass2_sekunden": dur_p2,
+        "pass3_sekunden": dur_p3,
+        "konsolidierung_sekunden": dur_cons,
+    }
+
+    await _log(db, aid, vid,
+               f"Konsolidierung abgeschlossen: {len(consolidated)} Fundstellen "
+               f"({merged_count} zusammengeführt, {solo_count} unverändert, "
+               f"{total_raw - len(consolidated)} Duplikate entfernt).",
+               details=auswertung["konsolidierung"])
+
+    # --- Step 6: Persist findings with merge provenance ---
+    for cf in consolidated:
+        raw = cf.finding
         fundstelle = Fundstelle(
             analyse_id=aid,
             vertrag_id=vid,
@@ -207,10 +306,15 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
             empfehlung=raw.empfehlung,
             quelle_pass=raw.quelle_pass,
             pruef_status=PruefStatus.OFFEN.value,
+            zusammenfuehrung=cf.merge_info(),
         )
         db.add(fundstelle)
 
-    # --- Step 7: Finalize ---
+    # --- Step 7: Finalize with auswertung ---
+    total_duration = round(time.monotonic() - pipeline_start, 1)
+    auswertung["zeiten"]["gesamt_sekunden"] = total_duration
+
+    analyse.auswertung = auswertung
     analyse.status = AnalyseStatus.ABGESCHLOSSEN.value
     analyse.aktueller_pass = None
     analyse.fortschritt = 100
@@ -218,12 +322,8 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     vertrag.status = VertragStatus.ANALYSIERT.value
 
     await _log(db, aid, vid,
-               f"Analyse abgeschlossen. {len(consolidated)} Fundstellen gespeichert.",
-               details={
-                   "pass1_kandidaten": len(findings_p1),
-                   "pass2_kandidaten": len(findings_p2),
-                   "pass3_kandidaten": len(findings_p3),
-                   "gesamt_vor_konsolidierung": len(all_raw_findings),
-                   "nach_konsolidierung": len(consolidated),
-               })
+               f"Analyse abgeschlossen in {total_duration}s. "
+               f"{len(consolidated)} Fundstellen gespeichert "
+               f"(aus {total_raw} Rohkandidaten).",
+               details=auswertung)
     await db.commit()

@@ -13,5 +13,6 @@ class AnalyseResponse(BaseModel):
     gestartet_am: datetime
     beendet_am: datetime | None = None
     fehler: str | None = None
+    auswertung: dict | None = None
 
     model_config = {"from_attributes": True}

@@ -16,6 +16,26 @@ export interface Analyse {
   gestartet_am: string;
   beendet_am: string | null;
   fehler: string | null;
+  auswertung: Record<string, unknown> | null;
+}
+
+export interface AnalyseAuswertung {
+  analyse_id: string;
+  status: string;
+  pipeline_auswertung: Record<string, unknown> | null;
+  fundstellen_gesamt: number;
+  quellen_verteilung_final: Record<string, number>;
+  kategorien_final: Record<string, number>;
+  risikostufen_final: Record<string, number>;
+  fundstellen_detail: Array<{
+    id: string;
+    kurzbeschreibung: string;
+    kategorie: string;
+    risikostufe: string;
+    quelle_pass: string;
+    segment_ids: string[];
+    zusammenfuehrung: Record<string, unknown> | null;
+  }>;
 }
 
 export interface Fundstelle {

@@ -37,10 +37,13 @@ class Fundstelle(Base):
     kurzbeschreibung: Mapped[str] = mapped_column(Text)
     erklaerung: Mapped[str | None] = mapped_column(Text, nullable=True)
     empfehlung: Mapped[str | None] = mapped_column(Text, nullable=True)
-    quelle_pass: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quelle_pass: Mapped[str | None] = mapped_column(String(500), nullable=True)
     pruef_status: Mapped[str] = mapped_column(String(50), default=PruefStatus.OFFEN.value)
     pruef_kommentar: Mapped[str | None] = mapped_column(Text, nullable=True)
     erstellt_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Consolidation debug: how many raw candidates were merged into this finding
+    zusammenfuehrung: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     analyse = relationship("Analyse", back_populates="fundstellen")
     vertrag = relationship("Vertrag", back_populates="fundstellen")

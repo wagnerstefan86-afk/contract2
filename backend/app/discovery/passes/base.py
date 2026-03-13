@@ -22,11 +22,25 @@ class RawFinding:
     quelle_pass: str = ""    # Which pass found this
 
 
-# Shared JSON schema instruction appended to all pass prompts
+# Shared recall-maximizing instruction block appended to all pass prompts
+RECALL_INSTRUCTION = """
+KRITISCH — RECALL-MAXIMIERUNG:
+- Dein Ziel ist es, MÖGLICHST VIELE potenziell problematische Stellen zu finden, nicht nur die "wichtigsten" oder "offensichtlichsten".
+- Erstelle KEINE priorisierte Kurzliste. Erstelle eine VOLLSTÄNDIGE Liste.
+- Auch Stellen mit niedrigem Risiko oder bloßem Hinweischarakter MÜSSEN aufgenommen werden.
+- Wenn eine Formulierung auch nur MÖGLICHERWEISE ein Risiko darstellt, nimm sie auf.
+- Fehlende Regelungen (z.B. keine Haftungsobergrenze) sind AUCH Fundstellen.
+- Einseitige Rechte des Auftraggebers sind IMMER eine Fundstelle.
+- Verweise auf externe Dokumente, Anlagen oder Standards sind IMMER eine Fundstelle.
+- Vage Formulierungen ("angemessen", "marktüblich", "Stand der Technik") sind IMMER eine Fundstelle.
+- Liefere lieber 20 Fundstellen als 5. Überinklusion wird NICHT bestraft, Unterinklusion SCHON.
+""".strip()
+
+# Shared JSON schema instruction
 FINDING_JSON_SCHEMA = """
 Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 {
-  "textstelle": "exaktes Zitat aus dem Vertrag",
+  "textstelle": "exaktes Zitat aus dem Vertrag (möglichst wörtlich)",
   "kategorie": "eine der Kategorien: Informationssicherheit, Datenschutz, Compliance & Regulatorik, Verfügbarkeit & Betrieb, Haftung & Gewährleistung, Audit & Berichtswesen, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten",
   "kurzbeschreibung": "kurzer Titel der Feststellung",
   "erklaerung": "warum dies ein Risiko für den Auftragnehmer ist",
@@ -35,6 +49,7 @@ Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 }
 
 Wenn du KEINE Feststellungen findest, antworte mit einem leeren Array: []
+ABER: Es ist extrem unwahrscheinlich, dass ein Vertragsabschnitt KEINE Fundstelle enthält. Prüfe nochmals, bevor du ein leeres Array zurückgibst.
 """.strip()
 
 

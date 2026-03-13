@@ -34,5 +34,8 @@ class Analyse(Base):
     beendet_am: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     fehler: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Pipeline evaluation / debug data — written at end of analysis
+    auswertung: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     vertrag = relationship("Vertrag", back_populates="analysen")
     fundstellen = relationship("Fundstelle", back_populates="analyse", cascade="all, delete-orphan")
