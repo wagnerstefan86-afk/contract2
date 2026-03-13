@@ -12,6 +12,7 @@ from app.models.fundstelle import Fundstelle
 from app.models.vertrag import Vertrag
 from app.schemas.analyse import AnalyseResponse
 from app.discovery.orchestrator import run_discovery
+from app.evaluation.evaluator import evaluiere
 
 router = APIRouter(prefix="/analysen", tags=["Analysen"])
 
@@ -58,6 +59,9 @@ async def analyse_auswertung(analyse_id: uuid.UUID, db: AsyncSession = Depends(g
             "kategorie": f.kategorie,
             "risikostufe": f.risikostufe,
             "quelle_pass": f.quelle_pass,
+            "textstelle": f.textstelle,
+            "erklaerung": f.erklaerung,
+            "empfehlung": f.empfehlung,
             "segment_ids": f.absatz_ids,
             "zusammenfuehrung": f.zusammenfuehrung,
         })
@@ -79,6 +83,39 @@ async def analyse_auswertung(analyse_id: uuid.UUID, db: AsyncSession = Depends(g
         "risikostufen_final": dict(Counter(f.risikostufe for f in fundstellen)),
         "fundstellen_detail": fundstellen_debug,
     }
+
+
+@router.get("/{analyse_id}/erwartungspruefung")
+async def analyse_erwartungspruefung(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Evaluate pipeline findings against curated expected themes for the demo contract.
+
+    Returns per-theme match status, recall quote, and unmatched extras.
+    """
+    analyse = await db.get(Analyse, analyse_id)
+    if not analyse:
+        raise HTTPException(status_code=404, detail="Analyse nicht gefunden")
+
+    result = await db.execute(
+        select(Fundstelle).where(Fundstelle.analyse_id == analyse_id)
+    )
+    fundstellen = result.scalars().all()
+
+    fundstellen_dicts = [
+        {
+            "id": str(f.id),
+            "kurzbeschreibung": f.kurzbeschreibung,
+            "kategorie": f.kategorie,
+            "risikostufe": f.risikostufe,
+            "quelle_pass": f.quelle_pass,
+            "textstelle": f.textstelle,
+            "erklaerung": f.erklaerung,
+            "empfehlung": f.empfehlung,
+        }
+        for f in fundstellen
+    ]
+
+    ergebnis = evaluiere(fundstellen_dicts)
+    return ergebnis.to_dict()
 
 
 @router.post("/vertrag/{vertrag_id}", response_model=AnalyseResponse, status_code=201)
