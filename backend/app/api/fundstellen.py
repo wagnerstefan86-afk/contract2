@@ -12,6 +12,28 @@ from app.discovery.gruppierung import gruppiere_fundstellen
 router = APIRouter(prefix="/fundstellen", tags=["Fundstellen"])
 
 
+def _fundstelle_to_dict(f: Fundstelle) -> dict:
+    """Convert ORM Fundstelle to dict for grouping logic."""
+    return {
+        "id": str(f.id),
+        "analyse_id": str(f.analyse_id),
+        "vertrag_id": str(f.vertrag_id),
+        "textstelle": f.textstelle,
+        "absatz_ids": f.absatz_ids,
+        "kategorie": f.kategorie,
+        "risikostufe": f.risikostufe,
+        "kurzbeschreibung": f.kurzbeschreibung,
+        "erklaerung": f.erklaerung,
+        "empfehlung": f.empfehlung,
+        "quelle_pass": f.quelle_pass,
+        "pruef_status": f.pruef_status,
+        "pruef_kommentar": f.pruef_kommentar,
+        "erstellt_am": f.erstellt_am.isoformat() if f.erstellt_am else None,
+        "detail": f.detail if hasattr(f, 'detail') else None,
+        "zusammenfuehrung": f.zusammenfuehrung,
+    }
+
+
 @router.get("/vertrag/{vertrag_id}", response_model=list[FundstelleResponse])
 async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -27,28 +49,7 @@ async def fundstellen_gruppiert(vertrag_id: uuid.UUID, db: AsyncSession = Depend
         select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
     )
     rows = result.scalars().all()
-    # Convert ORM objects to dicts for the grouping logic
-    fundstellen_dicts = [
-        {
-            "id": str(f.id),
-            "analyse_id": str(f.analyse_id),
-            "vertrag_id": str(f.vertrag_id),
-            "textstelle": f.textstelle,
-            "absatz_ids": f.absatz_ids,
-            "kategorie": f.kategorie,
-            "risikostufe": f.risikostufe,
-            "kurzbeschreibung": f.kurzbeschreibung,
-            "erklaerung": f.erklaerung,
-            "empfehlung": f.empfehlung,
-            "quelle_pass": f.quelle_pass,
-            "pruef_status": f.pruef_status,
-            "pruef_kommentar": f.pruef_kommentar,
-            "erstellt_am": f.erstellt_am.isoformat() if f.erstellt_am else None,
-            "zusammenfuehrung": f.zusammenfuehrung,
-        }
-        for f in rows
-    ]
-    return gruppiere_fundstellen(fundstellen_dicts)
+    return gruppiere_fundstellen([_fundstelle_to_dict(f) for f in rows])
 
 
 @router.get("/offen", response_model=list[FundstelleResponse])
@@ -66,27 +67,7 @@ async def offene_fundstellen_gruppiert(db: AsyncSession = Depends(get_db)):
         select(Fundstelle).where(Fundstelle.pruef_status == "Offen").order_by(Fundstelle.erstellt_am.desc())
     )
     rows = result.scalars().all()
-    fundstellen_dicts = [
-        {
-            "id": str(f.id),
-            "analyse_id": str(f.analyse_id),
-            "vertrag_id": str(f.vertrag_id),
-            "textstelle": f.textstelle,
-            "absatz_ids": f.absatz_ids,
-            "kategorie": f.kategorie,
-            "risikostufe": f.risikostufe,
-            "kurzbeschreibung": f.kurzbeschreibung,
-            "erklaerung": f.erklaerung,
-            "empfehlung": f.empfehlung,
-            "quelle_pass": f.quelle_pass,
-            "pruef_status": f.pruef_status,
-            "pruef_kommentar": f.pruef_kommentar,
-            "erstellt_am": f.erstellt_am.isoformat() if f.erstellt_am else None,
-            "zusammenfuehrung": f.zusammenfuehrung,
-        }
-        for f in rows
-    ]
-    return gruppiere_fundstellen(fundstellen_dicts)
+    return gruppiere_fundstellen([_fundstelle_to_dict(f) for f in rows])
 
 
 @router.get("/{fundstelle_id}", response_model=FundstelleResponse)

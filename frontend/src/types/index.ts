@@ -38,6 +38,22 @@ export interface AnalyseAuswertung {
   }>;
 }
 
+export interface FundstelleDetail {
+  seite: number | null;
+  seite_unsicher: boolean;
+  ueberschrift: string | null;
+  kontext: string | null;
+  kontext_start: number | null;
+  kontext_ende: number | null;
+  segment_ids: string[];
+  absatz_referenzen: string[];
+  risiko_detail: string;
+  alternativformulierung: string;
+  bieterfrage: string;
+  verhandlungsargumente: string;
+  position_im_text: number;
+}
+
 export interface Fundstelle {
   id: string;
   analyse_id: string;
@@ -52,6 +68,8 @@ export interface Fundstelle {
   pruef_status: string;
   pruef_kommentar: string | null;
   erstellt_am: string;
+  detail: FundstelleDetail | null;
+  zusammenfuehrung: Record<string, unknown> | null;
 }
 
 export interface FundstellenGruppe {

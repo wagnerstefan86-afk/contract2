@@ -135,3 +135,10 @@ def _merge_into(primary: ConsolidatedFinding, secondary: RawFinding,
     # Track that multiple passes found this
     if secondary.quelle_pass and secondary.quelle_pass not in pf.quelle_pass:
         pf.quelle_pass = f"{pf.quelle_pass}, {secondary.quelle_pass}"
+
+    # Keep longer/richer structured fields
+    for attr in ("risiko_detail", "alternativformulierung", "bieterfrage", "verhandlungsargumente"):
+        sec_val = getattr(secondary, attr, "")
+        pf_val = getattr(pf, attr, "")
+        if len(sec_val) > len(pf_val):
+            setattr(pf, attr, sec_val)

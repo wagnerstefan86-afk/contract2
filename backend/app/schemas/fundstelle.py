@@ -19,6 +19,7 @@ class FundstelleResponse(BaseModel):
     pruef_status: str
     pruef_kommentar: str | None = None
     erstellt_am: datetime
+    detail: dict | None = None
     zusammenfuehrung: dict | None = None
 
     model_config = {"from_attributes": True}

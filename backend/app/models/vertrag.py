@@ -26,6 +26,7 @@ class Vertrag(Base):
     dateipfad: Mapped[str] = mapped_column(String(1000))
     volltext: Mapped[str | None] = mapped_column(Text, nullable=True)
     absaetze: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    seiten_map: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default=VertragStatus.HOCHGELADEN.value)
     erstellt_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     aktualisiert_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

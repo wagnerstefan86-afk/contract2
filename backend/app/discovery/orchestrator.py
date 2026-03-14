@@ -19,13 +19,14 @@ from app.models.vertrag import Vertrag, VertragStatus
 from app.models.analyse import Analyse, AnalyseStatus
 from app.models.fundstelle import Fundstelle, PruefStatus
 from app.models.protokoll import Protokoll, ProtokollEbene
-from app.services.extraktion import text_aus_datei
+from app.services.extraktion import extrahiere_mit_seitenmap
 from app.discovery.chunking import text_in_absaetze, absaetze_zu_segmente
 from app.discovery.llm_client import lade_llm_config, LLMConfig
 from app.discovery.passes.breit import BreitPass
 from app.discovery.passes.perspektive import PerspektivePass
 from app.discovery.passes.implizit import ImplizitPass
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
+from app.discovery.anreicherung import anreichern
 from app.discovery.passes.base import RawFinding
 
 logger = logging.getLogger(__name__)
@@ -106,11 +107,15 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         await _log(db, aid, vid, "Volltext bereits vorhanden, überspringe Extraktion.")
     else:
         try:
-            full_text = text_aus_datei(vertrag.dateipfad)
+            ergebnis = extrahiere_mit_seitenmap(vertrag.dateipfad)
+            full_text = ergebnis.text
             vertrag.volltext = full_text
+            if ergebnis.seiten_map:
+                vertrag.seiten_map = ergebnis.seiten_map
             vertrag.status = VertragStatus.EXTRAHIERT.value
             await _log(db, aid, vid,
-                       f"Text extrahiert: {len(full_text)} Zeichen aus {vertrag.dateiname}")
+                       f"Text extrahiert: {len(full_text)} Zeichen, "
+                       f"{len(ergebnis.seiten_map)} Seiten aus {vertrag.dateiname}")
         except Exception as e:
             await _log(db, aid, vid,
                        f"Textextraktion fehlgeschlagen: {e}",
@@ -309,9 +314,24 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                f"{total_raw - len(consolidated)} Duplikate entfernt).",
                details=auswertung["konsolidierung"])
 
-    # --- Step 6: Persist findings with merge provenance ---
+    # --- Step 6: Enrich and persist findings ---
+    seiten_map = vertrag.seiten_map if hasattr(vertrag, 'seiten_map') else None
     for cf in consolidated:
         raw = cf.finding
+        # Build enriched detail from contract context
+        detail = anreichern(
+            finding_text=raw.textstelle,
+            full_text=full_text,
+            absaetze=absaetze,
+            seiten_map=seiten_map,
+            segment_ids=raw.segment_ids,
+            raw_fields={
+                "risiko_detail": raw.risiko_detail,
+                "alternativformulierung": raw.alternativformulierung,
+                "bieterfrage": raw.bieterfrage,
+                "verhandlungsargumente": raw.verhandlungsargumente,
+            },
+        )
         fundstelle = Fundstelle(
             analyse_id=aid,
             vertrag_id=vid,
@@ -324,6 +344,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
             empfehlung=raw.empfehlung,
             quelle_pass=raw.quelle_pass,
             pruef_status=PruefStatus.OFFEN.value,
+            detail=detail,
             zusammenfuehrung=cf.merge_info(),
         )
         db.add(fundstelle)
@@ -349,7 +370,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
 def _raw_finding_to_dict(f: RawFinding) -> dict:
     """Serialize a RawFinding to a JSON-safe dict for storage in auswertung."""
-    return {
+    d = {
         "textstelle": f.textstelle,
         "kategorie": f.kategorie,
         "kurzbeschreibung": f.kurzbeschreibung,
@@ -359,3 +380,13 @@ def _raw_finding_to_dict(f: RawFinding) -> dict:
         "segment_ids": f.segment_ids,
         "quelle_pass": f.quelle_pass,
     }
+    # Include structured fields if populated
+    if f.risiko_detail:
+        d["risiko_detail"] = f.risiko_detail
+    if f.alternativformulierung:
+        d["alternativformulierung"] = f.alternativformulierung
+    if f.bieterfrage:
+        d["bieterfrage"] = f.bieterfrage
+    if f.verhandlungsargumente:
+        d["verhandlungsargumente"] = f.verhandlungsargumente
+    return d

@@ -42,6 +42,9 @@ class Fundstelle(Base):
     pruef_kommentar: Mapped[str | None] = mapped_column(Text, nullable=True)
     erstellt_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    # Structured detail: enriched context, structured recommendations, page refs
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Consolidation debug: how many raw candidates were merged into this finding
     zusammenfuehrung: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

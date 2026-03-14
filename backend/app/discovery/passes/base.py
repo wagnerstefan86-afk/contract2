@@ -20,6 +20,11 @@ class RawFinding:
     risikostufe: str         # Hoch / Mittel / Niedrig / Hinweis
     segment_ids: list[str] = field(default_factory=list)
     quelle_pass: str = ""    # Which pass found this
+    # Structured recommendation fields (populated by LLM when available)
+    risiko_detail: str = ""          # Specific risk: what, for whom, consequence
+    alternativformulierung: str = "" # Suggested alternative contract wording
+    bieterfrage: str = ""            # Question to raise during bid/negotiation
+    verhandlungsargumente: str = ""  # Arguments for negotiation
 
 
 # Shared recall-maximizing instruction block appended to all pass prompts
@@ -40,12 +45,16 @@ KRITISCH — RECALL-MAXIMIERUNG:
 FINDING_JSON_SCHEMA = """
 Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 {
-  "textstelle": "exaktes Zitat aus dem Vertrag (möglichst wörtlich)",
+  "textstelle": "exaktes Zitat aus dem Vertrag (möglichst wörtlich, MINDESTENS ein vollständiger Satz, besser der ganze relevante Absatz)",
   "kategorie": "eine der Kategorien: Informationssicherheit, Datenschutz, Compliance & Regulatorik, Verfügbarkeit & Betrieb, Haftung & Gewährleistung, Audit & Berichtswesen, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten",
   "kurzbeschreibung": "kurzer Titel der Feststellung",
-  "erklaerung": "warum dies ein Risiko für den Auftragnehmer ist",
-  "empfehlung": "was der Auftragnehmer tun sollte",
-  "risikostufe": "Hoch oder Mittel oder Niedrig oder Hinweis"
+  "erklaerung": "KONKRETE Erklärung: (1) Was genau ist das Risiko? (2) Warum ist das für einen IT-Dienstleister/Auftragnehmer problematisch? (3) Welche operative, vertragliche oder regulatorische Konsequenz droht konkret? Keine generischen Phrasen.",
+  "empfehlung": "Konkrete Handlungsempfehlung für den Auftragnehmer",
+  "risikostufe": "Hoch oder Mittel oder Niedrig oder Hinweis",
+  "risiko_detail": "Präzise Einordnung: Welche konkrete Gefahr droht (z.B. unbegrenzte Kostenpflicht, Vertragsstrafe, regulatorisches Bußgeld, operative Überlastung)? Für wen genau? In welchem Szenario wird das Risiko schlagend?",
+  "alternativformulierung": "Vorschlag für eine faire Alternativformulierung der Vertragsklausel, die das Risiko für den AN begrenzt, ohne den Vertragszweck zu gefährden. Konkreter Textvorschlag.",
+  "bieterfrage": "Frage, die der Bieter/AN im Vergabeverfahren oder in der Verhandlung stellen sollte, um Klarheit zu schaffen. Kurz und präzise.",
+  "verhandlungsargumente": "1-3 sachliche Argumente, warum eine Anpassung dieser Klausel auch im Interesse des AG liegt oder marktüblich wäre."
 }
 
 Wenn du KEINE Feststellungen findest, antworte mit einem leeren Array: []
@@ -84,6 +93,10 @@ class DiscoveryPass(ABC):
                     risikostufe=str(item.get("risikostufe", "Hinweis")),
                     segment_ids=segment_ids,
                     quelle_pass=pass_name,
+                    risiko_detail=str(item.get("risiko_detail", "")),
+                    alternativformulierung=str(item.get("alternativformulierung", "")),
+                    bieterfrage=str(item.get("bieterfrage", "")),
+                    verhandlungsargumente=str(item.get("verhandlungsargumente", "")),
                 ))
             except Exception:
                 continue
