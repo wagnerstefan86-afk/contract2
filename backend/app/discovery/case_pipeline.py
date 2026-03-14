@@ -25,11 +25,17 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import func
+
 from app.models.analysis_case import AnalysisCase
 from app.models.case_document import CaseDocument
 from app.models.document_section import DocumentSection
 from app.models.positive_control import PositiveControl
 from app.models.processing_job import ProcessingJob
+from app.models.fundstelle import Fundstelle
+from app.models.theme import Theme
+from app.models.vertrag import Vertrag, VertragStatus
+from app.models.analyse import Analyse, AnalyseStatus
 from app.models.enums import (
     CaseStatus, DocumentStatus, ParseStatus, ClassificationStatus,
     JobType, JobStatus, SectionRouting, ControlType, ControlStatus,
@@ -69,6 +75,71 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
 
         # Step 4: Policy scan
         await _step_policy_scan(db, case)
+
+        # Load LLM config for Steps 6-10
+        llm_config = await lade_llm_config(db)
+        policy_rules = await load_active_rules(db)
+
+        # Create bridge Vertrag + Analyse for Fundstelle FK compatibility
+        bridge_vertrag, bridge_analyse = await _ensure_bridge_records(db, case)
+
+        # Step 6: Screening
+        job6 = await _create_job(db, case.id, JobType.SECTION_SCREEN)
+        try:
+            from app.discovery.case_steps import screen_sections
+            screen_metrics = await screen_sections(case.id, db, llm_config, policy_rules)
+            job6.payload_json = screen_metrics
+            await _complete_job(db, job6)
+        except Exception as e:
+            await _complete_job(db, job6, error=str(e))
+            logger.error(f"Screening fehlgeschlagen: {e}")
+
+        # Step 7: Extraction
+        job7 = await _create_job(db, case.id, JobType.SECTION_EXTRACT)
+        try:
+            from app.discovery.case_steps import extract_findings
+            extract_metrics = await extract_findings(
+                case.id, bridge_analyse.id, bridge_vertrag.id,
+                db, llm_config, policy_rules,
+            )
+            job7.payload_json = extract_metrics
+            await _complete_job(db, job7)
+        except Exception as e:
+            await _complete_job(db, job7, error=str(e))
+            logger.error(f"Extraktion fehlgeschlagen: {e}")
+
+        # Step 8: Topic Clustering
+        job8 = await _create_job(db, case.id, JobType.CASE_CLUSTER)
+        try:
+            from app.discovery.case_steps import cluster_findings
+            cluster_metrics = await cluster_findings(case.id, db, llm_config)
+            job8.payload_json = cluster_metrics
+            await _complete_job(db, job8)
+        except Exception as e:
+            await _complete_job(db, job8, error=str(e))
+            logger.error(f"Clustering fehlgeschlagen: {e}")
+
+        # Step 9: Consolidation
+        job9 = await _create_job(db, case.id, JobType.CASE_CONSOLIDATE)
+        try:
+            from app.discovery.case_steps import consolidate_themes
+            consolidate_metrics = await consolidate_themes(case.id, db, llm_config)
+            job9.payload_json = consolidate_metrics
+            await _complete_job(db, job9)
+        except Exception as e:
+            await _complete_job(db, job9, error=str(e))
+            logger.error(f"Konsolidierung fehlgeschlagen: {e}")
+
+        # Step 10: Final Editorial
+        job10 = await _create_job(db, case.id, JobType.CASE_EDITORIAL)
+        try:
+            from app.discovery.case_steps import final_editorial
+            editorial_metrics = await final_editorial(case.id, db, llm_config)
+            job10.payload_json = editorial_metrics
+            await _complete_job(db, job10)
+        except Exception as e:
+            await _complete_job(db, job10, error=str(e))
+            logger.error(f"Final Editorial fehlgeschlagen: {e}")
 
         # Update case counters
         await _update_case_counters(db, case)
@@ -362,6 +433,41 @@ async def _step_policy_scan(db: AsyncSession, case: AnalysisCase) -> None:
     await db.commit()
 
 
+async def _ensure_bridge_records(db: AsyncSession, case: AnalysisCase):
+    """Create bridge Vertrag + Analyse for FK compatibility with Fundstelle.
+
+    The case pipeline uses AnalysisCase but Fundstelle requires analyse_id/vertrag_id.
+    We create synthetic records to bridge the two models.
+    """
+    # Check if bridge vertrag already exists (idempotent)
+    result = await db.execute(
+        select(Vertrag).where(Vertrag.dateiname == f"__case__{case.id}")
+    )
+    vertrag = result.scalar_one_or_none()
+    if not vertrag:
+        vertrag = Vertrag(
+            dateiname=f"__case__{case.id}",
+            dateipfad="",
+            status=VertragStatus.IN_ANALYSE.value,
+        )
+        db.add(vertrag)
+        await db.flush()
+
+    result = await db.execute(
+        select(Analyse).where(Analyse.vertrag_id == vertrag.id)
+    )
+    analyse = result.scalar_one_or_none()
+    if not analyse:
+        analyse = Analyse(
+            vertrag_id=vertrag.id,
+            status=AnalyseStatus.GESTARTET.value,
+        )
+        db.add(analyse)
+        await db.flush()
+
+    return vertrag, analyse
+
+
 async def _update_case_counters(db: AsyncSession, case: AnalysisCase) -> None:
     """Update aggregate counters on the case."""
     # Document count
@@ -380,5 +486,26 @@ async def _update_case_counters(db: AsyncSession, case: AnalysisCase) -> None:
         .where(CaseDocument.analysis_case_id == case.id)
     )
     case.total_chunks = len(section_result.all())
+
+    # Finding count
+    finding_count = await db.execute(
+        select(func.count(Fundstelle.id))
+        .where(Fundstelle.analysis_case_id == case.id)
+    )
+    case.total_findings = finding_count.scalar() or 0
+
+    # Theme counts
+    theme_count = await db.execute(
+        select(func.count(Theme.id))
+        .where(Theme.analysis_case_id == case.id)
+    )
+    case.total_themes = theme_count.scalar() or 0
+
+    final_count = await db.execute(
+        select(func.count(Theme.id))
+        .where(Theme.analysis_case_id == case.id)
+        .where(Theme.final_selected == True)  # noqa: E712
+    )
+    case.total_final_themes = final_count.scalar() or 0
 
     await db.flush()

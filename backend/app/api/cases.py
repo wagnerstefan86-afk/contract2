@@ -6,7 +6,7 @@ import shutil
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +19,8 @@ from app.models.case_document import CaseDocument
 from app.models.document_section import DocumentSection
 from app.models.positive_control import PositiveControl
 from app.models.enums import CaseStatus, DocumentStatus, ParseStatus, ClassificationStatus
+from app.models.theme import Theme, ThemeEvidence
+from app.models.fundstelle import Fundstelle
 from app.schemas.analysis_case import (
     AnalysisCaseResponse,
     AnalysisCaseDetail,
@@ -26,6 +28,7 @@ from app.schemas.analysis_case import (
     CaseDocumentResponse,
 )
 from app.schemas.policy import PositiveControlResponse, DocumentSectionResponse
+from app.schemas.theme import ThemeResponse, ThemeEvidenceResponse, CaseThemesResponse
 
 router = APIRouter(prefix="/cases", tags=["Analysis Cases"])
 
@@ -211,3 +214,80 @@ async def list_sections(
 
     result = await db.execute(query)
     return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# Results — themes
+# ---------------------------------------------------------------------------
+
+@router.get("/{case_id}/themes", response_model=CaseThemesResponse)
+async def list_themes(
+    case_id: uuid.UUID,
+    final_only: bool = False,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all themes for a case, optionally filtered to final-selected only."""
+    query = (
+        select(Theme)
+        .where(Theme.analysis_case_id == case_id)
+        .options(selectinload(Theme.evidence))
+    )
+    if final_only:
+        query = query.where(Theme.final_selected == True)  # noqa: E712
+
+    query = query.order_by(Theme.final_rank.asc().nullslast(), Theme.created_at)
+    result = await db.execute(query)
+    themes = list(result.scalars().all())
+
+    # Denormalize evidence with finding details
+    theme_responses = []
+    for theme in themes:
+        evidence_responses = []
+        for ev in theme.evidence:
+            finding = await db.get(Fundstelle, ev.finding_id)
+            evidence_responses.append(ThemeEvidenceResponse(
+                id=ev.id,
+                finding_id=ev.finding_id,
+                evidence_role=ev.evidence_role,
+                rank=ev.rank,
+                kurzbeschreibung=finding.kurzbeschreibung if finding else None,
+                kategorie=finding.kategorie if finding else None,
+                risikostufe=finding.risikostufe if finding else None,
+                textstelle=finding.textstelle if finding else None,
+            ))
+
+        theme_responses.append(ThemeResponse(
+            id=theme.id,
+            analysis_case_id=theme.analysis_case_id,
+            category=theme.category,
+            canonical_title=theme.canonical_title,
+            canonical_summary=theme.canonical_summary,
+            severity=theme.severity,
+            source_finding_count=theme.source_finding_count,
+            source_document_count=theme.source_document_count,
+            conflict_detected=theme.conflict_detected,
+            conflict_summary=theme.conflict_summary,
+            final_selected=theme.final_selected,
+            final_rank=theme.final_rank,
+            final_editorial_json=theme.final_editorial_json,
+            final_rejection_reason=theme.final_rejection_reason,
+            final_selection_basis=theme.final_selection_basis,
+            created_at=theme.created_at,
+            evidence=evidence_responses,
+        ))
+
+    # Count totals
+    total_final = sum(1 for t in themes if t.final_selected)
+    finding_count_result = await db.execute(
+        select(func.count(Fundstelle.id))
+        .where(Fundstelle.analysis_case_id == case_id)
+    )
+    total_findings = finding_count_result.scalar() or 0
+
+    return CaseThemesResponse(
+        themes=theme_responses,
+        total_themes=len(themes),
+        total_final=total_final,
+        total_findings=total_findings,
+    )

@@ -288,6 +288,52 @@ export interface PolicyProfile {
   rules: PolicyRule[];
 }
 
+// --- Case Theme types (multi-document pipeline) ---
+
+export interface ThemeEvidence {
+  id: string;
+  finding_id: string;
+  evidence_role: string;
+  rank: number;
+  kurzbeschreibung: string | null;
+  kategorie: string | null;
+  risikostufe: string | null;
+  textstelle: string | null;
+}
+
+export interface CaseTheme {
+  id: string;
+  analysis_case_id: string;
+  category: string;
+  canonical_title: string;
+  canonical_summary: string | null;
+  severity: string;
+  source_finding_count: number;
+  source_document_count: number;
+  conflict_detected: boolean;
+  conflict_summary: string | null;
+  final_selected: boolean;
+  final_rank: number | null;
+  final_editorial_json: {
+    editorial_title?: string;
+    editorial_summary?: string;
+    alternativformulierung?: string;
+    bieterfrage?: string;
+    verhandlungsargumente?: string[];
+  } | null;
+  final_rejection_reason: string | null;
+  final_selection_basis: string | null;
+  created_at: string;
+  evidence: ThemeEvidence[];
+}
+
+export interface CaseThemesResponse {
+  themes: CaseTheme[];
+  total_themes: number;
+  total_final: number;
+  total_findings: number;
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;

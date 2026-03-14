@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import String, Text, Integer, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -35,6 +35,13 @@ class DocumentSection(Base):
     # Policy scan routing result
     routing: Mapped[str | None] = mapped_column(String(50), nullable=True)
     routing_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Step 6: Screening result
+    screening_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    screening_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Step 7: Extraction status
+    extraction_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
