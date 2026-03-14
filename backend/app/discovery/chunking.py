@@ -23,21 +23,53 @@ class Segment:
 
 
 def text_in_absaetze(text: str) -> list[dict]:
-    """Split text into paragraph blocks. A paragraph is separated by blank lines.
+    """Split text into paragraph blocks.
+
+    Primary split: blank lines (double newline).
+    Secondary split: if a block is very long (>800 chars), split further on
+    single newlines that look like paragraph boundaries (e.g. a line starting
+    with a number, letter+), section heading pattern, or bullet).
+    This improves granularity for PDFs where pdfplumber joins paragraphs
+    with single newlines.
 
     Returns list of {id, text, position} dicts matching the Vertrag.absaetze schema.
     """
     # Split on one or more blank lines
     raw_blocks = re.split(r"\n\s*\n", text)
+
+    # Further split oversized blocks on structural single-newline boundaries
+    refined_blocks: list[str] = []
+    # Pattern: line starts with a numbered clause (e.g. "1.", "1.1", "(a)", "(1)"),
+    # a bullet, or an ALL-CAPS / typical heading line
+    _split_pattern = re.compile(
+        r"\n(?="
+        r"\d+[\.\)]\s"           # "1. " or "1) "
+        r"|\(\d+\)\s"           # "(1) "
+        r"|\([a-z]\)\s"         # "(a) "
+        r"|[A-ZÜÖÄ][A-ZÜÖÄ\s]{4,}\n"  # ALL-CAPS heading line
+        r"|- "                  # bullet
+        r")"
+    )
+    for block in raw_blocks:
+        stripped = block.strip()
+        if not stripped:
+            continue
+        if len(stripped) > 800:
+            sub_blocks = _split_pattern.split(stripped)
+            for sb in sub_blocks:
+                sb = sb.strip()
+                if sb:
+                    refined_blocks.append(sb)
+        else:
+            refined_blocks.append(stripped)
+
     absaetze = []
-    for i, block in enumerate(raw_blocks):
-        cleaned = block.strip()
-        if cleaned:
-            absaetze.append({
-                "id": f"abs-{i}",
-                "text": cleaned,
-                "position": i,
-            })
+    for i, block in enumerate(refined_blocks):
+        absaetze.append({
+            "id": f"abs-{i}",
+            "text": block,
+            "position": i,
+        })
     return absaetze
 
 

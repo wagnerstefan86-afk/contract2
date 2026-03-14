@@ -54,6 +54,28 @@ export interface Fundstelle {
   erstellt_am: string;
 }
 
+export interface FundstellenGruppe {
+  gruppe_id: string;
+  titel: string;
+  kategorie: string;
+  risikostufe: string;
+  zusammenfassung: string;
+  anzahl: number;
+  fundstellen_ids: string[];
+  fundstellen: Fundstelle[];
+  themen_familie: string | null;
+}
+
+export interface GruppiertesErgebnis {
+  gruppen: FundstellenGruppe[];
+  debug: {
+    vorher: number;
+    nachher: number;
+    reduktion_prozent: number;
+    gruppen_details: Array<Record<string, unknown>>;
+  };
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;
