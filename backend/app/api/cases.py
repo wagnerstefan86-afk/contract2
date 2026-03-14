@@ -217,6 +217,55 @@ async def list_sections(
     return result.scalars().all()
 
 
+@router.get("/{case_id}/section-counts")
+async def get_section_counts(
+    case_id: uuid.UUID,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lightweight aggregate counts of sections by routing and screening_status.
+
+    Returns counts at two layers:
+    - policy_layer: how sections were routed by the policy engine
+    - screening_layer: how policy-reviewable sections were classified by LLM screening
+    """
+    base = (
+        select(DocumentSection.id, DocumentSection.routing, DocumentSection.screening_status)
+        .join(CaseDocument, DocumentSection.case_document_id == CaseDocument.id)
+        .where(CaseDocument.analysis_case_id == case_id)
+    )
+    result = await db.execute(base)
+    rows = result.all()
+
+    # Policy layer counts
+    routing_counts: dict[str, int] = {}
+    screening_counts: dict[str, int] = {}
+    for _id, routing, screening_status in rows:
+        key = routing or "NO_ROUTING"
+        routing_counts[key] = routing_counts.get(key, 0) + 1
+        if screening_status:
+            screening_counts[screening_status] = screening_counts.get(screening_status, 0) + 1
+
+    return {
+        "sections_total": len(rows),
+        "policy_layer": {
+            "reviewable": routing_counts.get("REVIEWABLE", 0),
+            "out_of_scope": routing_counts.get("OUT_OF_SCOPE", 0),
+            "positive_control": routing_counts.get("POSITIVE_CONTROL", 0),
+            "context_only": routing_counts.get("CONTEXT_ONLY", 0),
+            "ignore": routing_counts.get("IGNORE", 0),
+            "no_routing": routing_counts.get("NO_ROUTING", 0),
+        },
+        "screening_layer": {
+            "analyze": screening_counts.get("analyze", 0),
+            "context": screening_counts.get("context", 0),
+            "ignored": screening_counts.get("ignored", 0),
+            "error": screening_counts.get("error", 0),
+            "not_screened": len(rows) - sum(screening_counts.values()),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Results — themes
 # ---------------------------------------------------------------------------
