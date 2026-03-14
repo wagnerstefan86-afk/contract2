@@ -32,6 +32,7 @@ THEMEN_FAMILIEN: dict[str, list[str]] = {
         "regulat", "compliance", "aufsicht", "bafin", "eba", "dora",
         "mait", "bait", "kait", "vait", "durchreich", "auslagerung",
         "dsgvo", "datenschutz", "verordnung", "richtlinie",
+        "marisk", "kwg", "bankregulat",
     ],
     "Incident & Meldefristen": [
         "incident", "vorfall", "melde", "frist", "benachrichtig",

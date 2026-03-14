@@ -25,6 +25,7 @@ from app.discovery.llm_client import lade_llm_config, LLMConfig
 from app.discovery.passes.breit import BreitPass
 from app.discovery.passes.perspektive import PerspektivePass
 from app.discovery.passes.implizit import ImplizitPass
+from app.discovery.passes.bankregulatorik import BankregulatorikPass
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.passes.base import RawFinding
@@ -257,11 +258,38 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     all_raw_findings.extend(findings_p3)
     await db.commit()
 
+    # Pass 4: Bankregulatorik
+    await _update_analyse(db, analyse, AnalyseStatus.PASS_4.value, "Bankregulatorik", 78)
+    await _log(db, aid, vid, "Pass 4: Bankregulatorik gestartet (KWG, MaRisk, BAIT, DORA).")
+    await db.commit()
+
+    t0 = time.monotonic()
+    pass4 = BankregulatorikPass()
+    findings_p4 = await pass4.run(segments, llm_config, full_text)
+    dur_p4 = round(time.monotonic() - t0, 1)
+
+    p4_cats = Counter(f.kategorie for f in findings_p4)
+    auswertung["passes"]["pass4_bankregulatorik"] = {
+        "kandidaten": len(findings_p4),
+        "dauer_sekunden": dur_p4,
+        "kategorien": dict(p4_cats),
+    }
+
+    roh_kandidaten_pro_pass["Pass 4: Bankregulatorik"] = [
+        _raw_finding_to_dict(f) for f in findings_p4
+    ]
+
+    await _log(db, aid, vid,
+               f"Pass 4 abgeschlossen: {len(findings_p4)} Kandidaten in {dur_p4}s.",
+               details=auswertung["passes"]["pass4_bankregulatorik"])
+    all_raw_findings.extend(findings_p4)
+    await db.commit()
+
     # --- Step 5: Consolidation ---
     await _update_analyse(db, analyse, AnalyseStatus.KONSOLIDIERUNG.value, "Konsolidierung", 85)
     total_raw = len(all_raw_findings)
     await _log(db, aid, vid,
-               f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus 3 Passes.")
+               f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus 4 Passes.")
     await db.commit()
 
     t0 = time.monotonic()
@@ -304,6 +332,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "pass1_sekunden": dur_p1,
         "pass2_sekunden": dur_p2,
         "pass3_sekunden": dur_p3,
+        "pass4_sekunden": dur_p4,
         "konsolidierung_sekunden": dur_cons,
     }
     auswertung["roh_kandidaten"] = roh_kandidaten_pro_pass
