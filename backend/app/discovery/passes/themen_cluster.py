@@ -8,6 +8,7 @@ risk topics (Risikothemen). Individual findings are preserved as evidence.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -23,38 +24,55 @@ RISK_LEVEL_MAP = {
     "niedrig": "Niedrig",
 }
 
+RISK_LEVEL_ORDER = {"Kritisch": 4, "Hoch": 3, "Mittel": 2, "Niedrig": 1, "Hinweis": 0}
+
 SYSTEM_PROMPT = """Du erhältst eine Liste von Risiko-Fundstellen aus einem IT-Outsourcing-Vertrag.
 Viele Fundstellen beschreiben denselben Risikokern.
 Fasse diese Fundstellen zu übergeordneten RISIKOTHEMEN zusammen.
 
-Regeln:
+REGELN:
 1. Mehrere Fundstellen können zum selben Thema gehören.
-2. Ein Thema beschreibt den eigentlichen Risikokern.
+2. Ein Thema beschreibt den eigentlichen Risikokern, nicht einzelne Klauseln.
 3. Die einzelnen Fundstellen werden als Belege (Evidence) gesammelt.
-4. Themen müssen möglichst präzise sein.
+4. JEDE Fundstelle muss genau EINEM Thema zugeordnet werden.
 
-Zielgröße:
-Ein Vertrag von 10–20 Seiten sollte typischerweise 5–12 Risikothemen enthalten.
+ZIELGRÖSSE:
+Erzeuge zwischen 5 und 12 Risikothemen. Weniger ist besser als zu viele.
+Lieber ein breites Thema mit 8 Evidence als zwei enge Themen mit je 2 Evidence.
 
-Typische Themen sind z.B.:
-- Weisungsrechte
-- Audit / Reporting
-- Regulatorische Durchreichung
-- BCM / Disaster Recovery
-- Incidentpflichten
-- Subunternehmer
-- Exit / Datenherausgabe
-- Haftung
-- Leistungsumfang
+TITEL-REGELN (WICHTIG):
+- Verwende aussagekräftige, spezifische Titel mit mindestens 5 Wörtern.
+- NICHT: "Weisungsrecht" — zu kurz und generisch.
+- BESSER: "Weitreichendes Weisungs- und Anpassungsrecht des Auftraggebers"
+- Fasse Varianten zusammen: "Weisungsrecht", "Blanko-Weisungsrecht", "Einseitiges Weisungsrecht"
+  gehören alle zum selben Thema.
+- Der Titel soll den Risikokern beschreiben, nicht die Vertragsklausel.
+- Keine zwei Themen dürfen ähnliche oder redundante Titel haben.
+
+ANTI-PATTERNS (VERMEIDE):
+- Themen mit nur 1 Evidence — ordne diese einem verwandten Thema zu.
+- Mehrere Themen zum gleichen Risikokern (z.B. "Haftung" und "Haftungsbegrenzung" → zusammenfassen).
+- Generische Ein-Wort-Titel wie "Haftung", "Compliance", "Exit".
+
+TYPISCHE THEMEN sind z.B.:
+- Weitreichende Weisungs- und Gestaltungsrechte des Auftraggebers
+- Unzureichende Audit- und Berichtspflichten
+- Fehlende regulatorische Durchreichung (MaRisk, BAIT, DORA)
+- Mangelhaftes Business Continuity Management und Notfallplanung
+- Unklare Incident-Management- und Meldepflichten
+- Risiken bei Subunternehmer-Steuerung und Weiterverlagerung
+- Unzureichende Exit- und Datenherausgabe-Regelungen
+- Einseitige Haftungsverteilung und Haftungsbegrenzungen
+- Unklarer oder einseitig definierbarer Leistungsumfang
 
 AUSGABEFORMAT:
 Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 [
   {
-    "topic_title": "kurzer Titel des Risikothemas",
+    "topic_title": "Aussagekräftiger Titel des Risikothemas (mind. 5 Wörter)",
     "category": "Kategorie",
     "risk_level": "Kritisch | Hoch | Mittel | Niedrig",
-    "beschreibung": "Beschreibung des Risikos und warum es für den Auftragnehmer relevant ist",
+    "beschreibung": "2-3 Sätze: Was ist der Risikokern und warum ist er für den Auftragnehmer relevant?",
     "evidence": [
       {
         "ursprungstitel": "Titel der ursprünglichen Fundstelle (exakt wie in der Liste)"
@@ -64,9 +82,9 @@ Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 ]
 
 WICHTIG:
-- Jede Fundstelle aus der Liste muss genau EINEM Thema zugeordnet werden.
 - Verwende den exakten Titel (ursprungstitel) aus der Eingabeliste.
-- Erzeuge zwischen 5 und 12 Themen."""
+- Jede Fundstelle muss genau EINEM Thema zugeordnet werden.
+- Erzeuge zwischen 5 und 12 Themen. Maximal 12."""
 
 
 @dataclass
@@ -126,24 +144,343 @@ async def clustere_findings(
     if clusters is None:
         return None
 
-    # Validate: 3-15 topics, each with at least one evidence
-    if len(clusters) < 3 or len(clusters) > 15:
+    # Validate: at least 3 topics
+    if len(clusters) < 3:
         logger.warning(
-            f"Topic Clustering: {len(clusters)} Themen (erwartet 3-15), übersprungen"
+            f"Topic Clustering: nur {len(clusters)} Themen, übersprungen"
         )
         return None
-
-    empty_clusters = [c for c in clusters if not c.evidence_titles]
-    if empty_clusters:
-        logger.warning(
-            f"Topic Clustering: {len(empty_clusters)} Themen ohne Evidence"
-        )
 
     # Filter out empty clusters
     clusters = [c for c in clusters if c.evidence_titles]
 
-    logger.info(f"Topic Clustering: {len(clusters)} Risikothemen erzeugt")
+    # --- Post-LLM refinement pipeline ---
+    clusters = _refine_clusters(clusters)
+
+    logger.info(f"Topic Clustering: {len(clusters)} Risikothemen nach Refinement")
     return clusters
+
+
+def _refine_clusters(clusters: list[TopicCluster]) -> list[TopicCluster]:
+    """Post-LLM quality refinement pipeline.
+
+    Steps:
+    1. Normalize titles (reject short/generic labels)
+    2. Merge similar topics (title + category similarity)
+    3. Reassign single-evidence topics to best-matching larger topic
+    4. Deduplicate evidence across topics
+    5. Force-merge smallest topics if count > 12
+    """
+    if len(clusters) <= 1:
+        return clusters
+
+    # Step 1: Normalize titles
+    clusters = _normalize_titles(clusters)
+
+    # Step 2: Merge similar topics
+    clusters = _merge_similar_topics(clusters)
+
+    # Step 3: Reassign single-evidence topics
+    clusters = _reassign_singles(clusters)
+
+    # Step 4: Deduplicate evidence across topics
+    clusters = _deduplicate_evidence(clusters)
+
+    # Step 5: Enforce target count (max 12)
+    clusters = _enforce_target_count(clusters, max_count=12)
+
+    # Final cleanup: remove any now-empty clusters
+    clusters = [c for c in clusters if c.evidence_titles]
+
+    return clusters
+
+
+def _normalize_titles(clusters: list[TopicCluster]) -> list[TopicCluster]:
+    """Ensure titles are descriptive, not short generic labels."""
+    for cluster in clusters:
+        titel = cluster.titel.strip()
+
+        # Remove trailing periods
+        titel = titel.rstrip(".")
+
+        # If title is too short (< 20 chars / < 3 words), try to enrich it
+        words = titel.split()
+        if len(words) < 3 or len(titel) < 20:
+            # Use beschreibung to build a better title if available
+            if cluster.beschreibung and len(cluster.beschreibung) > 20:
+                # Extract first meaningful phrase from beschreibung
+                first_sentence = cluster.beschreibung.split(".")[0].strip()
+                if len(first_sentence) > len(titel) and len(first_sentence) <= 80:
+                    titel = first_sentence
+                else:
+                    # Prefix with category context
+                    titel = f"{titel} — {cluster.kategorie}" if cluster.kategorie else titel
+
+        # Cap at 100 chars
+        if len(titel) > 100:
+            titel = titel[:97] + "..."
+
+        cluster.titel = titel
+
+    return clusters
+
+
+def _merge_similar_topics(
+    clusters: list[TopicCluster],
+    titel_schwelle: float = 0.55,
+    kategorie_schwelle: float = 0.7,
+) -> list[TopicCluster]:
+    """Merge topics that have similar titles AND similar/same categories.
+
+    Uses a greedy approach: iterate pairs, merge the most similar first.
+    """
+    merged = True
+    while merged:
+        merged = False
+        best_pair = None
+        best_score = 0.0
+
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                a, b = clusters[i], clusters[j]
+
+                # Title similarity
+                titel_score = SequenceMatcher(
+                    None, _normalize_for_compare(a.titel), _normalize_for_compare(b.titel)
+                ).ratio()
+
+                # Category similarity
+                kat_score = SequenceMatcher(
+                    None, a.kategorie.lower(), b.kategorie.lower()
+                ).ratio()
+
+                # Evidence keyword overlap (check if evidence titles share keywords)
+                evidence_overlap = _evidence_keyword_overlap(a.evidence_titles, b.evidence_titles)
+
+                # Combined merge score: title is primary, category and evidence boost
+                combined = titel_score * 0.5 + kat_score * 0.25 + evidence_overlap * 0.25
+
+                # Merge if title similarity is high enough AND combined score passes
+                if titel_score >= titel_schwelle and combined > best_score and combined >= 0.45:
+                    best_score = combined
+                    best_pair = (i, j)
+
+                # Also merge if categories are very similar and titles share key terms
+                if kat_score >= kategorie_schwelle and titel_score >= 0.4 and combined > best_score:
+                    best_score = combined
+                    best_pair = (i, j)
+
+        if best_pair:
+            i, j = best_pair
+            _merge_into(clusters[i], clusters[j])
+            logger.debug(
+                f"Topic Merge: '{clusters[j].titel}' → '{clusters[i].titel}' "
+                f"(score={best_score:.2f})"
+            )
+            clusters.pop(j)
+            merged = True
+
+    return clusters
+
+
+def _reassign_singles(clusters: list[TopicCluster]) -> list[TopicCluster]:
+    """Reassign single-evidence topics to the best-matching larger topic."""
+    changed = True
+    while changed:
+        changed = False
+        singles = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_titles) == 1]
+        multi = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_titles) > 1]
+
+        if not multi:
+            break
+
+        for si, single in singles:
+            best_target = None
+            best_score = 0.0
+
+            for mi, target in multi:
+                # Compare title similarity
+                score = SequenceMatcher(
+                    None,
+                    _normalize_for_compare(single.titel),
+                    _normalize_for_compare(target.titel),
+                ).ratio()
+                # Boost if same category
+                if single.kategorie.lower() == target.kategorie.lower():
+                    score += 0.15
+                # Check evidence keyword overlap
+                score += _evidence_keyword_overlap(single.evidence_titles, target.evidence_titles) * 0.1
+
+                if score > best_score:
+                    best_score = score
+                    best_target = mi
+
+            # Reassign if reasonably similar (threshold 0.35 — fairly permissive
+            # since we prefer fewer topics over preserving tiny ones)
+            if best_target is not None and best_score >= 0.35:
+                target_cluster = clusters[best_target]
+                target_cluster.evidence_titles.extend(single.evidence_titles)
+                # Merge beschreibung
+                if single.beschreibung:
+                    target_cluster.beschreibung += f" {single.beschreibung}"
+                # Upgrade risk if single was higher
+                if _risk_order(single.risikostufe) > _risk_order(target_cluster.risikostufe):
+                    target_cluster.risikostufe = single.risikostufe
+
+                logger.debug(
+                    f"Single reassign: '{single.titel}' → '{target_cluster.titel}' "
+                    f"(score={best_score:.2f})"
+                )
+                clusters[si] = None  # type: ignore[assignment]
+                changed = True
+
+        clusters = [c for c in clusters if c is not None]
+
+    return clusters
+
+
+def _deduplicate_evidence(clusters: list[TopicCluster]) -> list[TopicCluster]:
+    """Remove duplicate evidence across topics.
+
+    If an evidence title appears in multiple topics, keep it only in the
+    topic with the highest risk level (or the one with more evidence).
+    """
+    # Build map: evidence_title -> list of (cluster_index, position)
+    evidence_map: dict[str, list[tuple[int, int]]] = {}
+    for ci, cluster in enumerate(clusters):
+        for ei, ev_title in enumerate(cluster.evidence_titles):
+            key = ev_title.lower().strip()
+            evidence_map.setdefault(key, []).append((ci, ei))
+
+    # Find duplicates and decide which cluster keeps each evidence
+    to_remove: set[tuple[int, int]] = set()  # (cluster_idx, evidence_idx)
+
+    for key, locations in evidence_map.items():
+        if len(locations) <= 1:
+            continue
+
+        # Keep in the cluster with highest risk, then most evidence
+        def cluster_priority(loc: tuple[int, int]) -> tuple[int, int]:
+            ci = loc[0]
+            return (_risk_order(clusters[ci].risikostufe), len(clusters[ci].evidence_titles))
+
+        locations_sorted = sorted(locations, key=cluster_priority, reverse=True)
+        # Keep first (highest priority), remove rest
+        for loc in locations_sorted[1:]:
+            to_remove.add(loc)
+            logger.debug(
+                f"Evidence dedup: '{key[:50]}' entfernt aus '{clusters[loc[0]].titel}'"
+            )
+
+    # Remove in reverse order to preserve indices
+    for ci, ei in sorted(to_remove, reverse=True):
+        if ei < len(clusters[ci].evidence_titles):
+            clusters[ci].evidence_titles.pop(ei)
+
+    return clusters
+
+
+def _enforce_target_count(
+    clusters: list[TopicCluster],
+    max_count: int = 12,
+) -> list[TopicCluster]:
+    """Force-merge the smallest/most similar topics until count <= max_count."""
+    while len(clusters) > max_count:
+        # Find the pair with highest similarity
+        best_pair = None
+        best_score = -1.0
+
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                score = SequenceMatcher(
+                    None,
+                    _normalize_for_compare(clusters[i].titel),
+                    _normalize_for_compare(clusters[j].titel),
+                ).ratio()
+                # Heavily prefer merging small topics
+                size_penalty = min(len(clusters[i].evidence_titles), len(clusters[j].evidence_titles))
+                adjusted = score + (1.0 / max(size_penalty, 1)) * 0.3
+
+                if adjusted > best_score:
+                    best_score = adjusted
+                    best_pair = (i, j)
+
+        if best_pair is None:
+            break
+
+        i, j = best_pair
+        _merge_into(clusters[i], clusters[j])
+        logger.debug(
+            f"Force merge (>{max_count}): '{clusters[j].titel}' → '{clusters[i].titel}'"
+        )
+        clusters.pop(j)
+
+    return clusters
+
+
+# --- Helpers ---
+
+def _merge_into(target: TopicCluster, source: TopicCluster) -> None:
+    """Merge source topic into target. Modifies target in-place."""
+    target.evidence_titles.extend(source.evidence_titles)
+
+    # Keep the longer/more descriptive title
+    if len(source.titel) > len(target.titel):
+        target.titel = source.titel
+
+    # Keep higher risk level
+    if _risk_order(source.risikostufe) > _risk_order(target.risikostufe):
+        target.risikostufe = source.risikostufe
+
+    # Merge descriptions
+    if source.beschreibung and source.beschreibung not in target.beschreibung:
+        target.beschreibung = f"{target.beschreibung} {source.beschreibung}"
+
+
+def _risk_order(level: str) -> int:
+    """Numeric risk ordering for comparisons."""
+    return RISK_LEVEL_ORDER.get(level, 0)
+
+
+def _normalize_for_compare(text: str) -> str:
+    """Normalize text for similarity comparison: lowercase, strip articles/filler."""
+    text = text.lower().strip()
+    # Remove common German filler words for better similarity matching
+    fillers = [
+        "der", "die", "das", "des", "dem", "den",
+        "ein", "eine", "eines", "einem", "einen",
+        "und", "oder", "bzw", "sowie",
+        "für", "bei", "mit", "von", "zum", "zur",
+        "im", "am", "an", "in", "auf",
+        "nicht", "keine", "kein",
+    ]
+    words = text.split()
+    words = [w for w in words if w not in fillers]
+    return " ".join(words)
+
+
+def _evidence_keyword_overlap(titles_a: list[str], titles_b: list[str]) -> float:
+    """Compute keyword overlap between two sets of evidence titles.
+
+    Returns a score between 0.0 and 1.0.
+    """
+    def extract_keywords(titles: list[str]) -> set[str]:
+        keywords = set()
+        for title in titles:
+            # Extract significant words (> 3 chars)
+            words = re.findall(r"[a-zäöüß]{4,}", title.lower())
+            keywords.update(words)
+        return keywords
+
+    kw_a = extract_keywords(titles_a)
+    kw_b = extract_keywords(titles_b)
+
+    if not kw_a or not kw_b:
+        return 0.0
+
+    intersection = kw_a & kw_b
+    union = kw_a | kw_b
+    return len(intersection) / len(union) if union else 0.0
 
 
 def _parse_clusters(items: list[dict]) -> list[TopicCluster] | None:
@@ -188,15 +525,18 @@ def resolve_topic_fundstellen(
 
     Uses fuzzy matching on kurzbeschreibung since consolidation may
     have slightly altered the descriptions.
-    """
-    result = []
 
-    for cluster in clusters:
-        matched = []
+    Each Fundstelle is assigned to at most one topic (the best match)
+    to prevent duplicate assignments.
+    """
+    # First pass: find best topic for each fundstelle
+    fs_best_topic: dict[int, tuple[int, float]] = {}  # fs_index -> (cluster_index, score)
+
+    for ci, cluster in enumerate(clusters):
         for ev_title in cluster.evidence_titles:
-            best_match = None
+            best_fi = None
             best_score = 0.0
-            for fs in fundstellen:
+            for fi, fs in enumerate(fundstellen):
                 score = SequenceMatcher(
                     None,
                     ev_title.lower(),
@@ -204,16 +544,29 @@ def resolve_topic_fundstellen(
                 ).ratio()
                 if score > best_score:
                     best_score = score
-                    best_match = fs
-            if best_match and best_score >= 0.75:
-                if best_match not in matched:
-                    matched.append(best_match)
-            else:
+                    best_fi = fi
+
+            if best_fi is not None and best_score >= 0.75:
+                existing = fs_best_topic.get(best_fi)
+                if existing is None:
+                    fs_best_topic[best_fi] = (ci, best_score)
+                elif best_score > existing[1]:
+                    # This topic has a better match — reassign
+                    fs_best_topic[best_fi] = (ci, best_score)
+            elif best_fi is not None:
                 logger.debug(
                     f"Topic '{cluster.titel}': Evidence '{ev_title[:50]}' "
                     f"nicht zugeordnet (bester Score: {best_score:.2f})"
                 )
-        result.append((cluster, matched))
+
+    # Build result: group fundstellen by cluster
+    cluster_fundstellen: dict[int, list] = {i: [] for i in range(len(clusters))}
+    for fi, (ci, _score) in fs_best_topic.items():
+        cluster_fundstellen[ci].append(fundstellen[fi])
+
+    result = []
+    for ci, cluster in enumerate(clusters):
+        result.append((cluster, cluster_fundstellen.get(ci, [])))
 
     return result
 
