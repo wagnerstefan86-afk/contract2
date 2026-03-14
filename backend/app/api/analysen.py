@@ -7,6 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
+from app.auth import get_current_user
+from app.models.benutzer import Benutzer
 from app.models.analyse import Analyse
 from app.models.fundstelle import Fundstelle
 from app.models.vertrag import Vertrag
@@ -19,7 +21,7 @@ router = APIRouter(prefix="/analysen", tags=["Analysen"])
 
 
 @router.get("/vertrag/{vertrag_id}", response_model=list[AnalyseResponse])
-async def analysen_fuer_vertrag(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def analysen_fuer_vertrag(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Analyse).where(Analyse.vertrag_id == vertrag_id).order_by(Analyse.gestartet_am.desc())
     )
@@ -27,7 +29,7 @@ async def analysen_fuer_vertrag(vertrag_id: uuid.UUID, db: AsyncSession = Depend
 
 
 @router.get("/{analyse_id}", response_model=AnalyseResponse)
-async def analyse_detail(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def analyse_detail(analyse_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     analyse = await db.get(Analyse, analyse_id)
     if not analyse:
         raise HTTPException(status_code=404, detail="Analyse nicht gefunden")
@@ -35,7 +37,7 @@ async def analyse_detail(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 
 @router.get("/{analyse_id}/auswertung")
-async def analyse_auswertung(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def analyse_auswertung(analyse_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Debug/evaluation endpoint: full pipeline observability for one analysis run.
 
     Returns pass-level stats, consolidation mapping, category/risk distribution,
@@ -87,7 +89,7 @@ async def analyse_auswertung(analyse_id: uuid.UUID, db: AsyncSession = Depends(g
 
 
 @router.get("/{analyse_id}/erwartungspruefung")
-async def analyse_erwartungspruefung(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def analyse_erwartungspruefung(analyse_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Evaluate pipeline findings against curated expected themes for the demo contract.
 
     Returns per-theme match status, recall quote, and unmatched extras.
@@ -130,7 +132,7 @@ async def analyse_erwartungspruefung(analyse_id: uuid.UUID, db: AsyncSession = D
 
 
 @router.post("/vertrag/{vertrag_id}", response_model=AnalyseResponse, status_code=201)
-async def analyse_starten(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def analyse_starten(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     vertrag = await db.get(Vertrag, vertrag_id)
     if not vertrag:
         raise HTTPException(status_code=404, detail="Vertrag nicht gefunden")

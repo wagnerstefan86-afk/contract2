@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
-from app.database import engine, Base
+from app.database import engine, Base, async_session
 from app.api.router import api_router
+from app.config import settings
 
 # Configure logging so discovery pipeline output is visible
 logging.basicConfig(
@@ -13,12 +15,51 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
+
+async def _bootstrap_admin():
+    """Create or promote the initial admin user on startup if configured via env."""
+    if not settings.initial_admin_email or not settings.initial_admin_password:
+        return
+
+    from app.models.benutzer import Benutzer, BenutzerRolle, BenutzerStatus
+    from app.auth import hash_passwort
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(Benutzer).where(Benutzer.email == settings.initial_admin_email.lower().strip())
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            if existing.rolle != BenutzerRolle.ADMIN.value or existing.status != BenutzerStatus.AKTIV.value:
+                existing.rolle = BenutzerRolle.ADMIN.value
+                existing.status = BenutzerStatus.AKTIV.value
+                await db.commit()
+                logger.info(f"Bestehender Benutzer '{existing.email}' zum Admin befördert")
+            else:
+                logger.info(f"Admin '{existing.email}' bereits vorhanden")
+        else:
+            admin = Benutzer(
+                name=settings.initial_admin_name,
+                email=settings.initial_admin_email.lower().strip(),
+                passwort_hash=hash_passwort(settings.initial_admin_password),
+                rolle=BenutzerRolle.ADMIN.value,
+                status=BenutzerStatus.AKTIV.value,
+            )
+            db.add(admin)
+            await db.commit()
+            logger.info(f"Initial-Admin '{admin.email}' erstellt")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on startup (replace with alembic migrations later)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Bootstrap admin user
+    await _bootstrap_admin()
     yield
 
 

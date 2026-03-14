@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     upload_dir: str = "/data/uploads"
     secret_key: str = "changeme"
 
+    # Initial admin: created/promoted on startup if set
+    initial_admin_email: str = ""
+    initial_admin_password: str = ""
+    initial_admin_name: str = "Administrator"
+
     model_config = {"env_file": ".env"}
 
 

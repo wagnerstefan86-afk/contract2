@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, async_session
+from app.auth import get_current_user
+from app.models.benutzer import Benutzer
 from app.models.vertrag import Vertrag, VertragStatus
 from app.models.analyse import Analyse
 from app.schemas.analyse import AnalyseResponse
@@ -25,7 +27,7 @@ FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "..", "fixtures", "demo_v
 
 
 @router.post("/vertrag-anlegen", response_model=VertragResponse, status_code=201)
-async def demo_vertrag_anlegen(db: AsyncSession = Depends(get_db)):
+async def demo_vertrag_anlegen(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Seed the demo contract with pre-loaded text. For testing only."""
     with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
         text = f.read()
@@ -48,7 +50,7 @@ class PlainTextInput(BaseModel):
 
 
 @router.post("/text-analyse", response_model=AnalyseResponse, status_code=201)
-async def text_analyse(eingabe: PlainTextInput, db: AsyncSession = Depends(get_db)):
+async def text_analyse(eingabe: PlainTextInput, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Create a contract from plain text and immediately start analysis.
 
     MVP convenience endpoint: skips file upload, directly inserts text.

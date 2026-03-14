@@ -5,13 +5,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.benutzer import Benutzer
 from app.models.protokoll import Protokoll
 
 router = APIRouter(prefix="/protokoll", tags=["Protokoll"])
 
 
 @router.get("/analyse/{analyse_id}")
-async def protokoll_fuer_analyse(analyse_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def protokoll_fuer_analyse(analyse_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Protokoll).where(Protokoll.analyse_id == analyse_id).order_by(Protokoll.erstellt_am.asc())
     )

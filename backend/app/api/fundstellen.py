@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.auth import get_current_user
+from app.models.benutzer import Benutzer
 from app.models.fundstelle import Fundstelle
 from app.schemas.fundstelle import FundstelleResponse, FundstelleUpdate
 from app.discovery.gruppierung import gruppiere_fundstellen
@@ -35,7 +37,7 @@ def _fundstelle_to_dict(f: Fundstelle) -> dict:
 
 
 @router.get("/vertrag/{vertrag_id}", response_model=list[FundstelleResponse])
-async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
     )
@@ -43,7 +45,7 @@ async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, db: AsyncSession = Dep
 
 
 @router.get("/vertrag/{vertrag_id}/gruppiert")
-async def fundstellen_gruppiert(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def fundstellen_gruppiert(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Return findings grouped into thematic clusters for reviewer-friendly display."""
     result = await db.execute(
         select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
@@ -53,7 +55,7 @@ async def fundstellen_gruppiert(vertrag_id: uuid.UUID, db: AsyncSession = Depend
 
 
 @router.get("/offen", response_model=list[FundstelleResponse])
-async def offene_fundstellen(db: AsyncSession = Depends(get_db)):
+async def offene_fundstellen(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Fundstelle).where(Fundstelle.pruef_status == "Offen").order_by(Fundstelle.erstellt_am.desc())
     )
@@ -61,7 +63,7 @@ async def offene_fundstellen(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/offen/gruppiert")
-async def offene_fundstellen_gruppiert(db: AsyncSession = Depends(get_db)):
+async def offene_fundstellen_gruppiert(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Return open findings grouped into thematic clusters."""
     result = await db.execute(
         select(Fundstelle).where(Fundstelle.pruef_status == "Offen").order_by(Fundstelle.erstellt_am.desc())
@@ -71,7 +73,7 @@ async def offene_fundstellen_gruppiert(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{fundstelle_id}", response_model=FundstelleResponse)
-async def fundstelle_detail(fundstelle_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     fundstelle = await db.get(Fundstelle, fundstelle_id)
     if not fundstelle:
         raise HTTPException(status_code=404, detail="Fundstelle nicht gefunden")
@@ -79,7 +81,7 @@ async def fundstelle_detail(fundstelle_id: uuid.UUID, db: AsyncSession = Depends
 
 
 @router.patch("/{fundstelle_id}", response_model=FundstelleResponse)
-async def fundstelle_bewerten(fundstelle_id: uuid.UUID, update: FundstelleUpdate, db: AsyncSession = Depends(get_db)):
+async def fundstelle_bewerten(fundstelle_id: uuid.UUID, update: FundstelleUpdate, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     fundstelle = await db.get(Fundstelle, fundstelle_id)
     if not fundstelle:
         raise HTTPException(status_code=404, detail="Fundstelle nicht gefunden")

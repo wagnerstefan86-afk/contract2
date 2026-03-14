@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.config import settings
+from app.auth import get_current_user
+from app.models.benutzer import Benutzer
 from app.models.vertrag import Vertrag, VertragStatus
 from app.schemas.vertrag import VertragResponse, VertragDetail
 
@@ -16,13 +18,13 @@ router = APIRouter(prefix="/vertraege", tags=["Verträge"])
 
 
 @router.get("", response_model=list[VertragResponse])
-async def liste_vertraege(db: AsyncSession = Depends(get_db)):
+async def liste_vertraege(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Vertrag).order_by(Vertrag.erstellt_am.desc()))
     return result.scalars().all()
 
 
 @router.get("/{vertrag_id}", response_model=VertragDetail)
-async def vertrag_detail(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def vertrag_detail(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     vertrag = await db.get(Vertrag, vertrag_id)
     if not vertrag:
         raise HTTPException(status_code=404, detail="Vertrag nicht gefunden")
@@ -30,7 +32,7 @@ async def vertrag_detail(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_d
 
 
 @router.post("", response_model=VertragResponse, status_code=201)
-async def vertrag_hochladen(datei: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+async def vertrag_hochladen(datei: UploadFile = File(...), user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     upload_dir = settings.upload_dir
     os.makedirs(upload_dir, exist_ok=True)
 
@@ -53,7 +55,7 @@ async def vertrag_hochladen(datei: UploadFile = File(...), db: AsyncSession = De
 
 
 @router.delete("/{vertrag_id}", status_code=204)
-async def vertrag_loeschen(vertrag_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def vertrag_loeschen(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     vertrag = await db.get(Vertrag, vertrag_id)
     if not vertrag:
         raise HTTPException(status_code=404, detail="Vertrag nicht gefunden")
