@@ -33,7 +33,7 @@ from app.discovery.passes.themen_cluster import (
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.passes.base import RawFinding
-from app.models.risikothema import RisikoThema
+from app.models.risikothema import RisikoThema, risikothema_fundstellen
 
 logger = logging.getLogger(__name__)
 
@@ -419,8 +419,18 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await db.flush()
 
     # --- Step 6b: Persist topic clusters ---
+    # NOTE: We must NOT access ORM relationship collections (e.g. thema.fundstellen)
+    # in async context — this triggers lazy loading which fails with greenlet_spawn.
+    # Instead, we insert into the junction table explicitly using plain UUIDs.
     if topic_clusters:
+        logger.info("Persist topic clusters: resolving evidence → Fundstellen mapping")
+
+        # Collect Fundstelle IDs eagerly (already in memory after flush, no lazy load)
+        fs_id_map = {i: fs.id for i, fs in enumerate(persisted_fundstellen)}
+
         resolved = resolve_topic_fundstellen(topic_clusters, persisted_fundstellen)
+
+        junction_rows = []
         for idx, (cluster, linked_fundstellen) in enumerate(resolved):
             thema = RisikoThema(
                 analyse_id=aid,
@@ -432,11 +442,25 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                 sortierung=idx,
             )
             db.add(thema)
-            await db.flush()
-            for fs in linked_fundstellen:
-                thema.fundstellen.append(fs)
+            await db.flush()  # assigns thema.id
+            logger.debug(f"RisikoThema erstellt: '{cluster.titel}' (id={thema.id})")
 
-        # Compute quality metrics
+            # Collect junction table rows — use plain UUIDs, no relationship access
+            for fs in linked_fundstellen:
+                junction_rows.append({
+                    "risikothema_id": thema.id,
+                    "fundstelle_id": fs.id,
+                })
+
+        # Bulk insert junction table rows (no ORM relationship loading)
+        if junction_rows:
+            logger.info(f"Persist topic clusters: {len(junction_rows)} Zuordnungen in Junction-Tabelle")
+            await db.execute(risikothema_fundstellen.insert(), junction_rows)
+            await db.flush()
+
+        logger.info(f"Persist topic clusters: {len(resolved)} Themen gespeichert")
+
+        # Compute quality metrics using plain data (no lazy loads)
         metriken = berechne_clustering_metriken(resolved, len(persisted_fundstellen))
         titel_liste = [c.titel for c, _ in resolved]
         aehnliche_themen = berechne_titel_aehnlichkeit(titel_liste)
@@ -467,7 +491,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                f"{len(consolidated)} Fundstellen gespeichert "
                f"(aus {total_raw} Rohkandidaten).",
                details=auswertung)
+    logger.info(f"Pipeline final commit: {len(consolidated)} Fundstellen, "
+                f"{len(topic_clusters) if topic_clusters else 0} Themen")
     await db.commit()
+    logger.info("Pipeline final commit erfolgreich")
 
 
 def _raw_finding_to_dict(f: RawFinding) -> dict:
