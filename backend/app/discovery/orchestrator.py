@@ -26,9 +26,11 @@ from app.discovery.passes.breit import BreitPass
 from app.discovery.passes.perspektive import PerspektivePass
 from app.discovery.passes.implizit import ImplizitPass
 from app.discovery.passes.bankregulatorik import BankregulatorikPass
+from app.discovery.passes.themen_cluster import clustere_findings, resolve_topic_fundstellen
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.passes.base import RawFinding
+from app.models.risikothema import RisikoThema
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +234,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await db.commit()
 
     # Pass 3: Implizite Pflichten
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_3.value, "Implizite Pflichten", 70)
+    await _update_analyse(db, analyse, AnalyseStatus.PASS_3.value, "Implizite Pflichten", 60)
     await _log(db, aid, vid, "Pass 3: Implizite Pflichten gestartet.")
     await db.commit()
 
@@ -259,7 +261,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     await db.commit()
 
     # Pass 4: Bankregulatorik
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_4.value, "Bankregulatorik", 78)
+    await _update_analyse(db, analyse, AnalyseStatus.PASS_4.value, "Bankregulatorik", 75)
     await _log(db, aid, vid, "Pass 4: Bankregulatorik gestartet (KWG, MaRisk, BAIT, DORA).")
     await db.commit()
 
@@ -285,8 +287,37 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     all_raw_findings.extend(findings_p4)
     await db.commit()
 
+    # --- Step 4b: Topic Clustering ---
+    await _update_analyse(db, analyse, AnalyseStatus.CLUSTERING.value, "Topic Clustering", 85)
+    await _log(db, aid, vid,
+               f"Topic Clustering gestartet: {len(all_raw_findings)} Findings clustern.")
+    await db.commit()
+
+    t0 = time.monotonic()
+    topic_clusters = await clustere_findings(all_raw_findings, llm_config)
+    dur_cluster = round(time.monotonic() - t0, 1)
+
+    if topic_clusters:
+        auswertung["clustering"] = {
+            "themen_anzahl": len(topic_clusters),
+            "dauer_sekunden": dur_cluster,
+            "themen": [
+                {"titel": t.titel, "evidence_count": len(t.evidence_titles)}
+                for t in topic_clusters
+            ],
+        }
+        await _log(db, aid, vid,
+                   f"Topic Clustering abgeschlossen: {len(topic_clusters)} Risikothemen in {dur_cluster}s.",
+                   details=auswertung["clustering"])
+    else:
+        auswertung["clustering"] = {"status": "uebersprungen", "dauer_sekunden": dur_cluster}
+        await _log(db, aid, vid,
+                   "Topic Clustering übersprungen (LLM-Ergebnis ungültig).",
+                   ebene=ProtokollEbene.WARNUNG.value)
+    await db.commit()
+
     # --- Step 5: Consolidation ---
-    await _update_analyse(db, analyse, AnalyseStatus.KONSOLIDIERUNG.value, "Konsolidierung", 85)
+    await _update_analyse(db, analyse, AnalyseStatus.KONSOLIDIERUNG.value, "Konsolidierung", 92)
     total_raw = len(all_raw_findings)
     await _log(db, aid, vid,
                f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus 4 Passes.")
@@ -333,6 +364,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "pass2_sekunden": dur_p2,
         "pass3_sekunden": dur_p3,
         "pass4_sekunden": dur_p4,
+        "clustering_sekunden": dur_cluster,
         "konsolidierung_sekunden": dur_cons,
     }
     auswertung["roh_kandidaten"] = roh_kandidaten_pro_pass
@@ -345,6 +377,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     # --- Step 6: Enrich and persist findings ---
     seiten_map = vertrag.seiten_map if hasattr(vertrag, 'seiten_map') else None
+    persisted_fundstellen: list[Fundstelle] = []
     for cf in consolidated:
         raw = cf.finding
         # Build enriched detail from contract context
@@ -377,6 +410,31 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
             zusammenfuehrung=cf.merge_info(),
         )
         db.add(fundstelle)
+        persisted_fundstellen.append(fundstelle)
+
+    # Flush to assign IDs to all Fundstellen before linking topics
+    await db.flush()
+
+    # --- Step 6b: Persist topic clusters ---
+    if topic_clusters:
+        resolved = resolve_topic_fundstellen(topic_clusters, persisted_fundstellen)
+        for idx, (cluster, linked_fundstellen) in enumerate(resolved):
+            thema = RisikoThema(
+                analyse_id=aid,
+                vertrag_id=vid,
+                titel=cluster.titel,
+                kategorie=cluster.kategorie,
+                risikostufe=cluster.risikostufe,
+                beschreibung=cluster.beschreibung,
+                sortierung=idx,
+            )
+            db.add(thema)
+            await db.flush()
+            for fs in linked_fundstellen:
+                thema.fundstellen.append(fs)
+
+        await _log(db, aid, vid,
+                   f"{len(resolved)} Risikothemen mit Fundstellen verknüpft.")
 
     # --- Step 7: Finalize with auswertung ---
     total_duration = round(time.monotonic() - pipeline_start, 1)

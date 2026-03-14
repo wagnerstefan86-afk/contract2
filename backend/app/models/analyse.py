@@ -16,6 +16,7 @@ class AnalyseStatus(str, enum.Enum):
     PASS_2 = "Pass 2 läuft"
     PASS_3 = "Pass 3 läuft"
     PASS_4 = "Pass 4 läuft"
+    CLUSTERING = "Clustering läuft"
     KONSOLIDIERUNG = "Konsolidierung"
     ABGESCHLOSSEN = "Abgeschlossen"
     FEHLGESCHLAGEN = "Fehlgeschlagen"
@@ -39,3 +40,4 @@ class Analyse(Base):
 
     vertrag = relationship("Vertrag", back_populates="analysen")
     fundstellen = relationship("Fundstelle", back_populates="analyse", cascade="all, delete-orphan")
+    risikothemen = relationship("RisikoThema", back_populates="analyse", cascade="all, delete-orphan")

@@ -33,3 +33,4 @@ class Vertrag(Base):
 
     analysen = relationship("Analyse", back_populates="vertrag", cascade="all, delete-orphan")
     fundstellen = relationship("Fundstelle", back_populates="vertrag", cascade="all, delete-orphan")
+    risikothemen = relationship("RisikoThema", back_populates="vertrag", cascade="all, delete-orphan")

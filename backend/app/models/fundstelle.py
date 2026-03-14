@@ -50,3 +50,4 @@ class Fundstelle(Base):
 
     analyse = relationship("Analyse", back_populates="fundstellen")
     vertrag = relationship("Vertrag", back_populates="fundstellen")
+    risikothemen = relationship("RisikoThema", secondary="risikothema_fundstellen", back_populates="fundstellen")

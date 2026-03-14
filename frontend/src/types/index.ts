@@ -94,6 +94,20 @@ export interface GruppiertesErgebnis {
   };
 }
 
+export interface RisikoThema {
+  id: string;
+  analyse_id: string;
+  vertrag_id: string;
+  titel: string;
+  kategorie: string;
+  risikostufe: string;
+  beschreibung: string;
+  sortierung: number;
+  erstellt_am: string;
+  fundstellen: Fundstelle[];
+  anzahl: number;
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;

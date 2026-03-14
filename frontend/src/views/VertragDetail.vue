@@ -42,11 +42,19 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0 0.5rem;">
       <h2 style="margin: 0;">
         Fundstellen
-        <span v-if="gruppiertesErgebnis" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
+        <span v-if="risikothemen.length > 0" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
+          ({{ risikothemen.length }} Risikothemen, {{ fundstellen.length }} Einzelfundstellen)
+        </span>
+        <span v-else-if="gruppiertesErgebnis" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
           ({{ gruppiertesErgebnis.debug.nachher }} Gruppen aus {{ gruppiertesErgebnis.debug.vorher }} Einzelfundstellen)
         </span>
       </h2>
       <div style="display: flex; gap: 0.5rem;">
+        <button
+          v-if="risikothemen.length > 0"
+          :style="{ background: ansicht === 'themen' ? '#2563eb' : '#e5e7eb', color: ansicht === 'themen' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
+          @click="ansicht = 'themen'"
+        >Risikothemen ({{ risikothemen.length }})</button>
         <button
           :style="{ background: ansicht === 'gruppiert' ? '#2563eb' : '#e5e7eb', color: ansicht === 'gruppiert' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
           @click="ansicht = 'gruppiert'"
@@ -55,6 +63,56 @@
           :style="{ background: ansicht === 'flat' ? '#2563eb' : '#e5e7eb', color: ansicht === 'flat' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
           @click="ansicht = 'flat'"
         >Alle ({{ fundstellen.length }})</button>
+      </div>
+    </div>
+
+    <!-- Risikothemen view (LLM-clustered topics) -->
+    <div v-if="ansicht === 'themen' && risikothemen.length > 0">
+      <div
+        v-for="thema in risikothemen"
+        :key="thema.id"
+        style="background: white; border-radius: 6px; margin-bottom: 0.75rem; border: 1px solid #e5e7eb; overflow: hidden;"
+      >
+        <div
+          style="padding: 0.75rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+          :style="{ borderLeft: `4px solid ${risikoFarbe(thema.risikostufe)}` }"
+          @click="toggleGruppe(thema.id)"
+        >
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <strong>{{ thema.titel }}</strong>
+              <StatusBadge :status="thema.risikostufe" />
+              <span style="background: #e5e7eb; color: #374151; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px;">
+                {{ thema.anzahl }} {{ thema.anzahl === 1 ? 'Fundstelle' : 'Fundstellen' }}
+              </span>
+              <span style="color: #6b7280; font-size: 0.8rem;">{{ thema.kategorie }}</span>
+            </div>
+            <div v-if="!offeneGruppen.has(thema.id)" style="color: #6b7280; font-size: 0.8rem; margin-top: 0.25rem;">
+              {{ thema.beschreibung.substring(0, 150) }}{{ thema.beschreibung.length > 150 ? '...' : '' }}
+            </div>
+          </div>
+          <span style="color: #9ca3af; font-size: 1.2rem; margin-left: 0.5rem;">
+            {{ offeneGruppen.has(thema.id) ? '▼' : '▶' }}
+          </span>
+        </div>
+        <div v-if="offeneGruppen.has(thema.id)" style="border-top: 1px solid #e5e7eb;">
+          <div style="padding: 0.75rem 1rem; background: #f9fafb; font-size: 0.85rem; color: #374151;">
+            {{ thema.beschreibung }}
+          </div>
+          <table style="margin: 0; border-radius: 0;">
+            <thead>
+              <tr><th>Kurzbeschreibung</th><th>Risiko</th><th>Kategorie</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="f in thema.fundstellen" :key="f.id">
+                <td><router-link :to="`/pruefung/${f.id}`">{{ f.kurzbeschreibung }}</router-link></td>
+                <td><StatusBadge :status="f.risikostufe" /></td>
+                <td style="font-size: 0.8rem; color: #6b7280;">{{ f.kategorie }}</td>
+                <td><StatusBadge :status="f.pruef_status" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -142,14 +200,15 @@ import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
 import DokumentVorschau from "../components/DokumentVorschau.vue";
-import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis } from "../types";
+import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema } from "../types";
 
 const route = useRoute();
 const vertrag = ref<Vertrag | null>(null);
 const analysen = ref<Analyse[]>([]);
 const fundstellen = ref<Fundstelle[]>([]);
 const gruppiertesErgebnis = ref<GruppiertesErgebnis | null>(null);
-const ansicht = ref<"gruppiert" | "flat">("gruppiert");
+const risikothemen = ref<RisikoThema[]>([]);
+const ansicht = ref<"themen" | "gruppiert" | "flat">("themen");
 const offeneGruppen = ref<Set<string>>(new Set());
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -161,6 +220,7 @@ const laeuft = computed(() =>
 
 function risikoFarbe(risiko: string): string {
   switch (risiko) {
+    case "Kritisch": return "#7c3aed";
     case "Hoch": return "#dc2626";
     case "Mittel": return "#f59e0b";
     case "Niedrig": return "#16a34a";
@@ -180,17 +240,25 @@ function toggleGruppe(gruppeId: string) {
 
 async function laden() {
   const id = route.params.id;
-  const [vRes, aRes, fRes, gRes] = await Promise.all([
+  const [vRes, aRes, fRes, gRes, tRes] = await Promise.all([
     api.get(`/vertraege/${id}`),
     api.get(`/analysen/vertrag/${id}`),
     api.get(`/fundstellen/vertrag/${id}`),
     api.get(`/fundstellen/vertrag/${id}/gruppiert`).catch(() => ({ data: null })),
+    api.get(`/risikothemen/vertrag/${id}`).catch(() => ({ data: [] })),
   ]);
   vertrag.value = vRes.data;
   analysen.value = aRes.data;
   fundstellen.value = fRes.data;
   if (gRes.data) {
     gruppiertesErgebnis.value = gRes.data;
+  }
+  risikothemen.value = tRes.data || [];
+  // Default to best available view
+  if (risikothemen.value.length > 0) {
+    ansicht.value = "themen";
+  } else if (gruppiertesErgebnis.value) {
+    ansicht.value = "gruppiert";
   }
 }
 
