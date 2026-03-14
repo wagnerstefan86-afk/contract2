@@ -26,7 +26,10 @@ from app.discovery.passes.breit import BreitPass
 from app.discovery.passes.perspektive import PerspektivePass
 from app.discovery.passes.implizit import ImplizitPass
 from app.discovery.passes.bankregulatorik import BankregulatorikPass
-from app.discovery.passes.themen_cluster import clustere_findings, resolve_topic_fundstellen
+from app.discovery.passes.themen_cluster import (
+    clustere_findings, resolve_topic_fundstellen,
+    berechne_clustering_metriken, berechne_titel_aehnlichkeit,
+)
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.passes.base import RawFinding
@@ -433,8 +436,20 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
             for fs in linked_fundstellen:
                 thema.fundstellen.append(fs)
 
+        # Compute quality metrics
+        metriken = berechne_clustering_metriken(resolved, len(persisted_fundstellen))
+        titel_liste = [c.titel for c, _ in resolved]
+        aehnliche_themen = berechne_titel_aehnlichkeit(titel_liste)
+        metriken["aehnliche_themen"] = aehnliche_themen
+
+        auswertung["clustering_metriken"] = metriken
+
         await _log(db, aid, vid,
-                   f"{len(resolved)} Risikothemen mit Fundstellen verknüpft.")
+                   f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
+                   f"Metriken: Ø {metriken['durchschnittliche_fundstellen_pro_thema']} Evidence/Thema, "
+                   f"{metriken['anzahl_themen_mit_nur_1_fundstelle']} Themen mit nur 1 Fundstelle, "
+                   f"{metriken['anzahl_evidence_mehrfach_zugeordnet']} mehrfach zugeordnet.",
+                   details=metriken)
 
     # --- Step 7: Finalize with auswertung ---
     total_duration = round(time.monotonic() - pipeline_start, 1)

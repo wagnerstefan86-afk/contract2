@@ -216,3 +216,62 @@ def resolve_topic_fundstellen(
         result.append((cluster, matched))
 
     return result
+
+
+def berechne_clustering_metriken(
+    resolved: list[tuple[TopicCluster, list]],
+    anzahl_einzelfindings: int,
+) -> dict:
+    """Compute quality metrics for the clustering result.
+
+    Returns a dict suitable for storage in auswertung["clustering_metriken"].
+    """
+    anzahl_themen = len(resolved)
+    evidence_counts = [len(fs_list) for _, fs_list in resolved]
+    total_evidence = sum(evidence_counts)
+
+    # Fundstellen that appear in more than one topic
+    seen_ids: dict[str, int] = {}
+    for _, fs_list in resolved:
+        for fs in fs_list:
+            fs_id = str(fs.id)
+            seen_ids[fs_id] = seen_ids.get(fs_id, 0) + 1
+    mehrfach_zugeordnet = sum(1 for count in seen_ids.values() if count > 1)
+
+    themen_ohne_evidence = sum(1 for c in evidence_counts if c == 0)
+    themen_mit_1 = sum(1 for c in evidence_counts if c == 1)
+    durchschnitt = round(total_evidence / anzahl_themen, 1) if anzahl_themen else 0
+
+    return {
+        "anzahl_einzelfindings": anzahl_einzelfindings,
+        "anzahl_risikothemen": anzahl_themen,
+        "durchschnittliche_fundstellen_pro_thema": durchschnitt,
+        "anzahl_themen_ohne_evidence": themen_ohne_evidence,
+        "anzahl_evidence_mehrfach_zugeordnet": mehrfach_zugeordnet,
+        "anzahl_themen_mit_nur_1_fundstelle": themen_mit_1,
+    }
+
+
+def berechne_titel_aehnlichkeit(
+    themen_titel: list[str],
+    schwellenwert: float = 0.6,
+) -> list[dict]:
+    """Find pairs of topic titles that are suspiciously similar.
+
+    Returns a list of dicts with keys: thema_a, thema_b, aehnlichkeit.
+    """
+    aehnliche = []
+    for i in range(len(themen_titel)):
+        for j in range(i + 1, len(themen_titel)):
+            score = SequenceMatcher(
+                None,
+                themen_titel[i].lower(),
+                themen_titel[j].lower(),
+            ).ratio()
+            if score >= schwellenwert:
+                aehnliche.append({
+                    "thema_a": themen_titel[i],
+                    "thema_b": themen_titel[j],
+                    "aehnlichkeit": round(score, 2),
+                })
+    return aehnliche

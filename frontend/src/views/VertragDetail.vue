@@ -116,6 +116,66 @@
       </div>
     </div>
 
+    <!-- Clustering Debug -->
+    <div v-if="ansicht === 'themen' && clusteringDebug" style="margin-bottom: 1rem;">
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.8rem; color: #374151;">
+        <span style="font-weight: 600;">Clustering-Qualität:</span>
+        {{ clusteringDebug.metriken.anzahl_risikothemen }} Risikothemen aus {{ clusteringDebug.metriken.anzahl_einzelfindings }} Einzelfindings
+        &middot; Ø {{ clusteringDebug.metriken.durchschnittliche_fundstellen_pro_thema }} Evidence/Thema
+        <span v-if="clusteringDebug.warnungen.length > 0" style="color: #b45309;">
+          &middot; {{ clusteringDebug.warnungen.length }} Warnung{{ clusteringDebug.warnungen.length !== 1 ? 'en' : '' }}
+        </span>
+        <button
+          style="background: none; border: none; color: #2563eb; cursor: pointer; font-size: 0.8rem; margin-left: 0.5rem; padding: 0; text-decoration: underline;"
+          @click="debugOffen = !debugOffen"
+        >{{ debugOffen ? 'Debug ausblenden' : 'Debug anzeigen' }}</button>
+      </div>
+
+      <div v-if="debugOffen" style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; margin-top: 0.5rem; overflow: hidden;">
+        <!-- Warnings -->
+        <div v-if="clusteringDebug.warnungen.length > 0" style="padding: 0.75rem 1rem; border-bottom: 1px solid #e5e7eb;">
+          <div style="font-weight: 600; font-size: 0.8rem; margin-bottom: 0.4rem; color: #b45309;">Warnungen</div>
+          <div
+            v-for="(w, i) in clusteringDebug.warnungen"
+            :key="i"
+            style="font-size: 0.78rem; color: #6b7280; padding: 0.15rem 0;"
+            :style="{ color: w.typ === 'aehnliche_titel' ? '#7c3aed' : w.typ === 'mehrfach_zugeordnet' ? '#dc2626' : '#b45309' }"
+          >
+            <span v-if="w.typ === 'einzelne_fundstelle'">&#9888; {{ w.nachricht }}</span>
+            <span v-else-if="w.typ === 'mehrfach_zugeordnet'">&#10060; {{ w.nachricht }}</span>
+            <span v-else-if="w.typ === 'aehnliche_titel'">&#128279; {{ w.nachricht }}</span>
+            <span v-else>{{ w.nachricht }}</span>
+          </div>
+        </div>
+
+        <!-- Debug table -->
+        <table style="margin: 0; border-radius: 0; font-size: 0.78rem;">
+          <thead>
+            <tr>
+              <th>Thema</th>
+              <th>Evidence</th>
+              <th>Risiko</th>
+              <th>Ähnliche Themen</th>
+              <th>Warnungen</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in clusteringDebug.themen" :key="t.id">
+              <td style="max-width: 250px;">{{ t.titel }}</td>
+              <td style="text-align: center;">{{ t.anzahl_evidence }}</td>
+              <td><StatusBadge :status="t.risikostufe" /></td>
+              <td style="font-size: 0.75rem; color: #7c3aed;">
+                {{ aehnlicheThemenFuer(t.titel).join(', ') || '—' }}
+              </td>
+              <td style="font-size: 0.75rem; color: #b45309;">
+                {{ warnungenFuerThema(t.titel).join('; ') || '—' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Grouped view -->
     <div v-if="ansicht === 'gruppiert' && gruppiertesErgebnis && gruppiertesErgebnis.gruppen.length > 0">
       <div
@@ -200,7 +260,7 @@ import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
 import DokumentVorschau from "../components/DokumentVorschau.vue";
-import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema } from "../types";
+import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, ClusteringDebug } from "../types";
 
 const route = useRoute();
 const vertrag = ref<Vertrag | null>(null);
@@ -208,6 +268,8 @@ const analysen = ref<Analyse[]>([]);
 const fundstellen = ref<Fundstelle[]>([]);
 const gruppiertesErgebnis = ref<GruppiertesErgebnis | null>(null);
 const risikothemen = ref<RisikoThema[]>([]);
+const clusteringDebug = ref<ClusteringDebug | null>(null);
+const debugOffen = ref(false);
 const ansicht = ref<"themen" | "gruppiert" | "flat">("themen");
 const offeneGruppen = ref<Set<string>>(new Set());
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -257,6 +319,10 @@ async function laden() {
   // Default to best available view
   if (risikothemen.value.length > 0) {
     ansicht.value = "themen";
+    // Load debug data in background
+    api.get(`/risikothemen/vertrag/${id}/debug`).then(r => {
+      clusteringDebug.value = r.data;
+    }).catch(() => {});
   } else if (gruppiertesErgebnis.value) {
     ansicht.value = "gruppiert";
   }
@@ -281,6 +347,23 @@ function stopPolling() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+}
+
+function aehnlicheThemenFuer(titel: string): string[] {
+  if (!clusteringDebug.value) return [];
+  return clusteringDebug.value.aehnliche_themen
+    .filter(p => p.thema_a === titel || p.thema_b === titel)
+    .map(p => {
+      const other = p.thema_a === titel ? p.thema_b : p.thema_a;
+      return `${other} (${Math.round(p.aehnlichkeit * 100)}%)`;
+    });
+}
+
+function warnungenFuerThema(titel: string): string[] {
+  if (!clusteringDebug.value) return [];
+  return clusteringDebug.value.warnungen
+    .filter(w => w.thema === titel)
+    .map(w => w.typ === 'einzelne_fundstelle' ? 'Nur 1 Fundstelle' : w.nachricht);
 }
 
 function datum(iso: string): string {

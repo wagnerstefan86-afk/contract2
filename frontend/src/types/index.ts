@@ -108,6 +108,49 @@ export interface RisikoThema {
   anzahl: number;
 }
 
+export interface ClusteringDebugWarnung {
+  typ: string;
+  thema?: string;
+  nachricht: string;
+  fundstelle_id?: string;
+  anzahl_themen?: number;
+  thema_a?: string;
+  thema_b?: string;
+  aehnlichkeit?: number;
+}
+
+export interface ClusteringDebugThema {
+  id: string;
+  titel: string;
+  kategorie: string;
+  risikostufe: string;
+  anzahl_evidence: number;
+  fundstellen: Array<{
+    id: string;
+    kurzbeschreibung: string;
+    kategorie: string;
+    risikostufe: string;
+  }>;
+}
+
+export interface ClusteringDebug {
+  themen: ClusteringDebugThema[];
+  metriken: {
+    anzahl_einzelfindings: number;
+    anzahl_risikothemen: number;
+    durchschnittliche_fundstellen_pro_thema: number;
+    anzahl_themen_ohne_evidence: number;
+    anzahl_evidence_mehrfach_zugeordnet: number;
+    anzahl_themen_mit_nur_1_fundstelle: number;
+  };
+  warnungen: ClusteringDebugWarnung[];
+  aehnliche_themen: Array<{
+    thema_a: string;
+    thema_b: string;
+    aehnlichkeit: number;
+  }>;
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;
