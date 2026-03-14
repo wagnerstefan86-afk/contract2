@@ -6,13 +6,14 @@ Manages the full case lifecycle:
 3. Document Classify — determine document type
 4. Section Split — chunk into sections
 5. Policy Scan — route sections via policy rules
-6. Screening — filter non-relevant sections (placeholder)
+6. Screening — LLM section classification
 7. Extraction — LLM-based finding extraction per section
 8. Case Clustering — group findings into themes
 9. Case Consolidation — deduplicate and merge themes
 10. Final Editorial — select core themes for reviewers
 
 Each step creates/updates ProcessingJob records for resume capability.
+Collects PipelineMetrics for observability (Task 1).
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from app.models.fundstelle import Fundstelle
 from app.models.theme import Theme
 from app.models.vertrag import Vertrag, VertragStatus
 from app.models.analyse import Analyse, AnalyseStatus
+from app.models.pipeline_metrics import PipelineMetrics
 from app.models.enums import (
     CaseStatus, DocumentStatus, ParseStatus, ClassificationStatus,
     JobType, JobStatus, SectionRouting, ControlType, ControlStatus,
@@ -43,7 +45,7 @@ from app.models.enums import (
 from app.discovery.document_parser import parse_document, classify_document, compute_sha256, detect_language
 from app.discovery.section_splitter import split_into_sections
 from app.discovery.policy_engine import load_active_rules, scan_section
-from app.discovery.llm_client import lade_llm_config
+from app.discovery.llm_client import lade_llm_config, get_throttle
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +55,15 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
 
     This is the main entry point for case-based analysis.
     Each step is wrapped in a ProcessingJob for observability and resume.
+    Collects PipelineMetrics and pipeline_warnings throughout.
     """
     case = await db.get(AnalysisCase, case_id)
     if not case:
         logger.error(f"AnalysisCase {case_id} nicht gefunden")
         return
+
+    pipeline_start = time.monotonic()
+    pipeline_warnings: list[str] = []
 
     try:
         case.status = CaseStatus.PROCESSING.value
@@ -83,6 +89,13 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
         # Create bridge Vertrag + Analyse for Fundstelle FK compatibility
         bridge_vertrag, bridge_analyse = await _ensure_bridge_records(db, case)
 
+        # Initialize step metrics
+        screen_metrics = {}
+        extract_metrics = {}
+        cluster_metrics = {}
+        consolidate_metrics = {}
+        editorial_metrics = {}
+
         # Step 6: Screening
         job6 = await _create_job(db, case.id, JobType.SECTION_SCREEN)
         try:
@@ -90,9 +103,13 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
             screen_metrics = await screen_sections(case.id, db, llm_config, policy_rules)
             job6.payload_json = screen_metrics
             await _complete_job(db, job6)
+            # Collect screening warnings (Task 3)
+            if screen_metrics.get("warnings"):
+                pipeline_warnings.extend(screen_metrics["warnings"])
         except Exception as e:
             await _complete_job(db, job6, error=str(e))
             logger.error(f"Screening fehlgeschlagen: {e}")
+            pipeline_warnings.append(f"SCREENING_ERROR: {e}")
 
         # Step 7: Extraction
         job7 = await _create_job(db, case.id, JobType.SECTION_EXTRACT)
@@ -107,6 +124,7 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
         except Exception as e:
             await _complete_job(db, job7, error=str(e))
             logger.error(f"Extraktion fehlgeschlagen: {e}")
+            pipeline_warnings.append(f"EXTRACTION_ERROR: {e}")
 
         # Step 8: Topic Clustering
         job8 = await _create_job(db, case.id, JobType.CASE_CLUSTER)
@@ -118,6 +136,7 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
         except Exception as e:
             await _complete_job(db, job8, error=str(e))
             logger.error(f"Clustering fehlgeschlagen: {e}")
+            pipeline_warnings.append(f"CLUSTERING_ERROR: {e}")
 
         # Step 9: Consolidation
         job9 = await _create_job(db, case.id, JobType.CASE_CONSOLIDATE)
@@ -129,6 +148,7 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
         except Exception as e:
             await _complete_job(db, job9, error=str(e))
             logger.error(f"Konsolidierung fehlgeschlagen: {e}")
+            pipeline_warnings.append(f"CONSOLIDATION_ERROR: {e}")
 
         # Step 10: Final Editorial
         job10 = await _create_job(db, case.id, JobType.CASE_EDITORIAL)
@@ -140,21 +160,62 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
         except Exception as e:
             await _complete_job(db, job10, error=str(e))
             logger.error(f"Final Editorial fehlgeschlagen: {e}")
+            pipeline_warnings.append(f"EDITORIAL_ERROR: {e}")
+
+        # Compute processing time
+        processing_time = time.monotonic() - pipeline_start
+
+        # Task 1: Save PipelineMetrics
+        throttle = get_throttle(llm_config)
+        metrics = PipelineMetrics(
+            case_id=case.id,
+            sections_total=screen_metrics.get("total", 0),
+            sections_screened=screen_metrics.get("total", 0),
+            sections_analyzed=screen_metrics.get("risk_candidate", 0),
+            sections_ignored=screen_metrics.get("ignored", 0),
+            sections_context=screen_metrics.get("context", 0),
+            findings_created=extract_metrics.get("total_findings", 0),
+            positive_controls_found=extract_metrics.get("total_positive_controls", 0),
+            clusters_created=cluster_metrics.get("total_themes", 0),
+            themes_after_consolidation=consolidate_metrics.get("themes_after", cluster_metrics.get("total_themes", 0)),
+            themes_final=editorial_metrics.get("selected", 0),
+            processing_time_seconds=round(processing_time, 2),
+            llm_calls_total=throttle.stats.get("total_requests", 0),
+        )
+        db.add(metrics)
 
         # Update case counters
         await _update_case_counters(db, case)
+
+        # Store pipeline warnings and summary on case
+        case.pipeline_warnings = pipeline_warnings if pipeline_warnings else None
+        case.processing_summary = {
+            "processing_time_seconds": round(processing_time, 2),
+            "sections_total": screen_metrics.get("total", 0),
+            "sections_analyzed": screen_metrics.get("risk_candidate", 0),
+            "findings_created": extract_metrics.get("total_findings", 0),
+            "clusters_created": cluster_metrics.get("total_themes", 0),
+            "themes_after_consolidation": consolidate_metrics.get("themes_after", 0),
+            "themes_final": editorial_metrics.get("selected", 0),
+            "llm_calls_total": throttle.stats.get("total_requests", 0),
+        }
 
         case.status = CaseStatus.COMPLETED.value
         case.finished_at = datetime.utcnow()
         await db.commit()
 
-        logger.info(f"Case pipeline abgeschlossen: {case_id}")
+        logger.info(
+            f"Case pipeline abgeschlossen: {case_id} "
+            f"({round(processing_time, 1)}s, {len(pipeline_warnings)} warnings)"
+        )
 
     except Exception as e:
         logger.exception(f"Case pipeline fehlgeschlagen: {e}")
         case.status = CaseStatus.FAILED.value
         case.failure_reason = str(e)
         case.finished_at = datetime.utcnow()
+        pipeline_warnings.append(f"PIPELINE_FATAL: {e}")
+        case.pipeline_warnings = pipeline_warnings
         await db.commit()
 
 
@@ -220,9 +281,6 @@ async def _step_parse_documents(db: AsyncSession, case: AnalysisCase) -> None:
             doc.char_count = len(extraction.text)
             doc.page_count = len(extraction.seiten_map) if extraction.seiten_map else None
             doc.language = detect_language(extraction.text)
-
-            # Store extracted text path (we store inline for now via section split)
-            # The raw text is kept in memory and passed to section splitter
 
             doc.parse_status = ParseStatus.COMPLETED.value
             doc.status = DocumentStatus.PARSED.value
@@ -481,11 +539,11 @@ async def _update_case_counters(db: AsyncSession, case: AnalysisCase) -> None:
 
     # Section count
     section_result = await db.execute(
-        select(DocumentSection.id)
+        select(func.count(DocumentSection.id))
         .join(CaseDocument, DocumentSection.case_document_id == CaseDocument.id)
         .where(CaseDocument.analysis_case_id == case.id)
     )
-    case.total_chunks = len(section_result.all())
+    case.total_chunks = section_result.scalar() or 0
 
     # Finding count
     finding_count = await db.execute(
@@ -509,3 +567,84 @@ async def _update_case_counters(db: AsyncSession, case: AnalysisCase) -> None:
     case.total_final_themes = final_count.scalar() or 0
 
     await db.flush()
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — Case Summary Generator
+# ---------------------------------------------------------------------------
+
+async def generate_case_summary(case_id: uuid.UUID, db: AsyncSession) -> dict:
+    """Generate a summary of the case analysis results."""
+    case = await db.get(AnalysisCase, case_id)
+    if not case:
+        return {"error": "Case not found"}
+
+    # Count documents
+    doc_count = await db.execute(
+        select(func.count(CaseDocument.id))
+        .where(CaseDocument.analysis_case_id == case_id)
+    )
+
+    # Count sections
+    sections_total = await db.execute(
+        select(func.count(DocumentSection.id))
+        .join(CaseDocument, DocumentSection.case_document_id == CaseDocument.id)
+        .where(CaseDocument.analysis_case_id == case_id)
+    )
+
+    # Count sections analyzed
+    sections_analyzed = await db.execute(
+        select(func.count(DocumentSection.id))
+        .join(CaseDocument, DocumentSection.case_document_id == CaseDocument.id)
+        .where(CaseDocument.analysis_case_id == case_id)
+        .where(DocumentSection.screening_status == "analyze")
+    )
+
+    # Count findings
+    findings_count = await db.execute(
+        select(func.count(Fundstelle.id))
+        .where(Fundstelle.analysis_case_id == case_id)
+    )
+
+    # Count themes
+    themes_count = await db.execute(
+        select(func.count(Theme.id))
+        .where(Theme.analysis_case_id == case_id)
+    )
+
+    # Count final themes
+    final_themes_count = await db.execute(
+        select(func.count(Theme.id))
+        .where(Theme.analysis_case_id == case_id)
+        .where(Theme.final_selected == True)  # noqa: E712
+    )
+
+    # Count positive controls
+    pc_count = await db.execute(
+        select(func.count(PositiveControl.id))
+        .where(PositiveControl.analysis_case_id == case_id)
+    )
+
+    # Get processing time from metrics
+    metrics_result = await db.execute(
+        select(PipelineMetrics)
+        .where(PipelineMetrics.case_id == case_id)
+        .order_by(PipelineMetrics.created_at.desc())
+        .limit(1)
+    )
+    pipeline_metrics = metrics_result.scalar_one_or_none()
+
+    return {
+        "case_id": str(case_id),
+        "title": case.title,
+        "status": case.status,
+        "documents": doc_count.scalar() or 0,
+        "sections_total": sections_total.scalar() or 0,
+        "sections_analyzed": sections_analyzed.scalar() or 0,
+        "findings": findings_count.scalar() or 0,
+        "themes": themes_count.scalar() or 0,
+        "themes_final": final_themes_count.scalar() or 0,
+        "positive_controls": pc_count.scalar() or 0,
+        "processing_time_seconds": pipeline_metrics.processing_time_seconds if pipeline_metrics else None,
+        "pipeline_warnings": case.pipeline_warnings or [],
+    }

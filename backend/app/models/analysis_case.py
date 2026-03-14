@@ -39,6 +39,7 @@ class AnalysisCase(Base):
     total_final_themes: Mapped[int] = mapped_column(Integer, default=0)
 
     processing_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    pipeline_warnings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships

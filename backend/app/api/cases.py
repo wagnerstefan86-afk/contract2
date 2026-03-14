@@ -21,6 +21,7 @@ from app.models.positive_control import PositiveControl
 from app.models.enums import CaseStatus, DocumentStatus, ParseStatus, ClassificationStatus
 from app.models.theme import Theme, ThemeEvidence
 from app.models.fundstelle import Fundstelle
+from app.models.pipeline_metrics import PipelineMetrics, ThemeDebugSnapshot
 from app.schemas.analysis_case import (
     AnalysisCaseResponse,
     AnalysisCaseDetail,
@@ -291,3 +292,94 @@ async def list_themes(
         total_final=total_final,
         total_findings=total_findings,
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Pipeline Metrics
+# ---------------------------------------------------------------------------
+
+@router.get("/{case_id}/metrics")
+async def get_metrics(
+    case_id: uuid.UUID,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get pipeline metrics for a case."""
+    result = await db.execute(
+        select(PipelineMetrics)
+        .where(PipelineMetrics.case_id == case_id)
+        .order_by(PipelineMetrics.created_at.desc())
+        .limit(1)
+    )
+    metrics = result.scalar_one_or_none()
+    if not metrics:
+        raise HTTPException(status_code=404, detail="Keine Metriken vorhanden")
+
+    return {
+        "case_id": str(metrics.case_id),
+        "sections_total": metrics.sections_total,
+        "sections_screened": metrics.sections_screened,
+        "sections_analyzed": metrics.sections_analyzed,
+        "sections_ignored": metrics.sections_ignored,
+        "sections_context": metrics.sections_context,
+        "findings_created": metrics.findings_created,
+        "positive_controls_found": metrics.positive_controls_found,
+        "clusters_created": metrics.clusters_created,
+        "themes_after_consolidation": metrics.themes_after_consolidation,
+        "themes_final": metrics.themes_final,
+        "processing_time_seconds": metrics.processing_time_seconds,
+        "llm_calls_total": metrics.llm_calls_total,
+        "created_at": metrics.created_at.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 8: Case Summary
+# ---------------------------------------------------------------------------
+
+@router.get("/{case_id}/summary")
+async def get_summary(
+    case_id: uuid.UUID,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a summary of the case analysis results."""
+    from app.discovery.case_pipeline import generate_case_summary
+    summary = await generate_case_summary(case_id, db)
+    if "error" in summary:
+        raise HTTPException(status_code=404, detail=summary["error"])
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Debug Snapshots
+# ---------------------------------------------------------------------------
+
+@router.get("/{case_id}/debug-snapshots")
+async def list_debug_snapshots(
+    case_id: uuid.UUID,
+    stage: str | None = None,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List debug snapshots for a case, optionally filtered by stage."""
+    query = (
+        select(ThemeDebugSnapshot)
+        .where(ThemeDebugSnapshot.case_id == case_id)
+    )
+    if stage:
+        query = query.where(ThemeDebugSnapshot.stage == stage)
+
+    query = query.order_by(ThemeDebugSnapshot.created_at)
+    result = await db.execute(query)
+    snapshots = result.scalars().all()
+
+    return [
+        {
+            "id": str(s.id),
+            "stage": s.stage,
+            "data_json": s.data_json,
+            "created_at": s.created_at.isoformat(),
+        }
+        for s in snapshots
+    ]

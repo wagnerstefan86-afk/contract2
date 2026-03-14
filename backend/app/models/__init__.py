@@ -11,10 +11,12 @@ from app.models.policy_profile import PolicyProfile, PolicyRule
 from app.models.positive_control import PositiveControl
 from app.models.theme import Theme, ThemeEvidence
 from app.models.processing_job import ProcessingJob
+from app.models.pipeline_metrics import PipelineMetrics, ThemeDebugSnapshot
 
 __all__ = [
     "Vertrag", "Analyse", "Fundstelle", "Einstellung", "Protokoll", "RisikoThema",
     "AnalysisCase", "CaseDocument", "DocumentSection",
     "PolicyProfile", "PolicyRule", "PositiveControl",
     "Theme", "ThemeEvidence", "ProcessingJob",
+    "PipelineMetrics", "ThemeDebugSnapshot",
 ]

@@ -45,6 +45,7 @@ class AnalysisCaseResponse(BaseModel):
     total_findings: int
     total_themes: int
     total_final_themes: int
+    pipeline_warnings: list[str] | None = None
     failure_reason: str | None = None
 
     model_config = {"from_attributes": True}
