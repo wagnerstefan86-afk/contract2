@@ -42,7 +42,10 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0 0.5rem;">
       <h2 style="margin: 0;">
         Fundstellen
-        <span v-if="risikothemen.length > 0" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
+        <span v-if="finalEditorial && finalEditorial.metriken.hat_editorial" style="font-size: 0.85rem; color: #1e40af; font-weight: normal;">
+          ({{ finalEditorial.metriken.anzahl_finale_themen_nachher }} Kernthemen aus {{ finalEditorial.metriken.anzahl_cluster_themen_vorher }} Clustern)
+        </span>
+        <span v-else-if="risikothemen.length > 0" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
           ({{ risikothemen.length }} Risikothemen, {{ fundstellen.length }} Einzelfundstellen)
         </span>
         <span v-else-if="gruppiertesErgebnis" style="font-size: 0.85rem; color: #6b7280; font-weight: normal;">
@@ -50,6 +53,11 @@
         </span>
       </h2>
       <div style="display: flex; gap: 0.5rem;">
+        <button
+          v-if="finalEditorial && finalEditorial.metriken.hat_editorial"
+          :style="{ background: ansicht === 'final' ? '#2563eb' : '#e5e7eb', color: ansicht === 'final' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
+          @click="ansicht = 'final'"
+        >Kernthemen ({{ finalEditorial.finale_themen.length }})</button>
         <button
           v-if="risikothemen.length > 0"
           :style="{ background: ansicht === 'themen' ? '#2563eb' : '#e5e7eb', color: ansicht === 'themen' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
@@ -63,6 +71,120 @@
           :style="{ background: ansicht === 'flat' ? '#2563eb' : '#e5e7eb', color: ansicht === 'flat' ? 'white' : '#1a1a1a', fontSize: '0.8rem', padding: '0.3rem 0.7rem' }"
           @click="ansicht = 'flat'"
         >Alle ({{ fundstellen.length }})</button>
+      </div>
+    </div>
+
+    <!-- FINAL EDITORIAL view (reduced core themes — main view for reviewers) -->
+    <div v-if="ansicht === 'final' && finalEditorial && finalEditorial.metriken.hat_editorial">
+      <!-- Metrics bar -->
+      <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.8rem; color: #1e40af; margin-bottom: 0.75rem;">
+        <strong>Final Editorial:</strong>
+        {{ finalEditorial.metriken.anzahl_finale_themen_nachher }} Kernthemen
+        aus {{ finalEditorial.metriken.anzahl_cluster_themen_vorher }} Cluster-Themen selektiert
+        &middot; {{ finalEditorial.metriken.anzahl_verworfene_themen }} verworfen
+        &middot; {{ finalEditorial.metriken.anzahl_ausgewaehlte_evidenzen }} Evidenzen
+      </div>
+
+      <!-- Final themes -->
+      <div
+        v-for="thema in finalEditorial.finale_themen"
+        :key="thema.id"
+        style="background: white; border-radius: 6px; margin-bottom: 0.75rem; border: 1px solid #e5e7eb; overflow: hidden;"
+      >
+        <!-- Theme header -->
+        <div
+          style="padding: 0.75rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+          :style="{ borderLeft: `4px solid ${risikoFarbe(thema.risikostufe)}` }"
+          @click="toggleGruppe(thema.id)"
+        >
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+              <strong>{{ thema.titel }}</strong>
+              <StatusBadge :status="thema.risikostufe" />
+              <span style="background: #dbeafe; color: #1e40af; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px;">
+                {{ thema.fundstellen.length }} {{ thema.fundstellen.length === 1 ? 'Evidenz' : 'Evidenzen' }}
+              </span>
+              <span style="color: #6b7280; font-size: 0.8rem;">{{ thema.kategorie }}</span>
+            </div>
+            <div v-if="!offeneGruppen.has(thema.id)" style="color: #374151; font-size: 0.8rem; margin-top: 0.25rem;">
+              {{ thema.kurzbeschreibung.substring(0, 200) }}{{ thema.kurzbeschreibung.length > 200 ? '...' : '' }}
+            </div>
+          </div>
+          <span style="color: #9ca3af; font-size: 1.2rem; margin-left: 0.5rem;">
+            {{ offeneGruppen.has(thema.id) ? '▼' : '▶' }}
+          </span>
+        </div>
+
+        <!-- Expanded content -->
+        <div v-if="offeneGruppen.has(thema.id)" style="border-top: 1px solid #e5e7eb;">
+          <!-- Risk description -->
+          <div style="padding: 0.75rem 1rem; background: #f9fafb; font-size: 0.85rem;">
+            <div style="color: #374151; margin-bottom: 0.5rem;">{{ thema.kurzbeschreibung }}</div>
+            <div v-if="thema.warum_verhandlungsrelevant" style="color: #1e40af; font-size: 0.8rem;">
+              <strong>Verhandlungsrelevanz:</strong> {{ thema.warum_verhandlungsrelevant }}
+            </div>
+          </div>
+
+          <!-- Evidence table -->
+          <table style="margin: 0; border-radius: 0;">
+            <thead>
+              <tr><th></th><th>Fundstelle</th><th>Risiko</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="f in thema.fundstellen" :key="f.id" :style="{ background: f.ist_primaer ? '#eff6ff' : 'white' }">
+                <td style="width: 30px; text-align: center;">
+                  <span v-if="f.ist_primaer" style="color: #2563eb; font-weight: bold; font-size: 0.75rem;" title="Primärevidenz">P</span>
+                  <span v-else style="color: #6b7280; font-size: 0.75rem;" title="Sekundärevidenz">S</span>
+                </td>
+                <td><router-link :to="`/pruefung/${f.id}`">{{ f.kurzbeschreibung }}</router-link></td>
+                <td><StatusBadge :status="f.risikostufe" /></td>
+                <td><StatusBadge :status="f.pruef_status" /></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- Recommendation block -->
+          <div style="padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; font-size: 0.8rem;">
+            <div v-if="thema.alternativformulierung" style="margin-bottom: 0.5rem;">
+              <strong style="color: #374151;">Alternativformulierung:</strong>
+              <div style="color: #4b5563; margin-top: 0.25rem; padding: 0.5rem; background: #f0fdf4; border-radius: 4px; border: 1px solid #bbf7d0;">
+                {{ thema.alternativformulierung }}
+              </div>
+            </div>
+            <div v-if="thema.bieterfrage" style="margin-bottom: 0.5rem;">
+              <strong style="color: #374151;">Bieterfrage:</strong>
+              <div style="color: #4b5563; margin-top: 0.25rem; padding: 0.5rem; background: #fef3c7; border-radius: 4px; border: 1px solid #fde68a;">
+                {{ thema.bieterfrage }}
+              </div>
+            </div>
+            <div v-if="thema.verhandlungsargumente && thema.verhandlungsargumente.length > 0">
+              <strong style="color: #374151;">Verhandlungsargumente:</strong>
+              <ul style="margin: 0.25rem 0 0 1rem; color: #4b5563;">
+                <li v-for="(arg, ai) in thema.verhandlungsargumente" :key="ai">{{ arg }}</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rejected themes (collapsible) -->
+      <div v-if="finalEditorial.verworfene_themen.length > 0" style="margin-top: 0.5rem;">
+        <button
+          style="background: none; border: none; color: #6b7280; cursor: pointer; font-size: 0.8rem; padding: 0; text-decoration: underline;"
+          @click="verworfeneOffen = !verworfeneOffen"
+        >
+          {{ verworfeneOffen ? 'Verworfene Themen ausblenden' : `${finalEditorial.verworfene_themen.length} verworfene Themen anzeigen` }}
+        </button>
+        <div v-if="verworfeneOffen" style="margin-top: 0.5rem; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 0.75rem 1rem; font-size: 0.8rem;">
+          <div
+            v-for="vt in finalEditorial.verworfene_themen"
+            :key="vt.id"
+            style="padding: 0.25rem 0; color: #6b7280;"
+          >
+            <span style="text-decoration: line-through;">{{ vt.titel }}</span>
+            <span style="color: #9ca3af;"> — {{ vt.grund }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -260,7 +382,7 @@ import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
 import DokumentVorschau from "../components/DokumentVorschau.vue";
-import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, ClusteringDebug } from "../types";
+import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, ClusteringDebug, FinalEditorialResult } from "../types";
 
 const route = useRoute();
 const vertrag = ref<Vertrag | null>(null);
@@ -269,8 +391,10 @@ const fundstellen = ref<Fundstelle[]>([]);
 const gruppiertesErgebnis = ref<GruppiertesErgebnis | null>(null);
 const risikothemen = ref<RisikoThema[]>([]);
 const clusteringDebug = ref<ClusteringDebug | null>(null);
+const finalEditorial = ref<FinalEditorialResult | null>(null);
 const debugOffen = ref(false);
-const ansicht = ref<"themen" | "gruppiert" | "flat">("themen");
+const verworfeneOffen = ref(false);
+const ansicht = ref<"final" | "themen" | "gruppiert" | "flat">("final");
 const offeneGruppen = ref<Set<string>>(new Set());
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -316,8 +440,17 @@ async function laden() {
     gruppiertesErgebnis.value = gRes.data;
   }
   risikothemen.value = tRes.data || [];
+  // Load final editorial data
+  try {
+    const feRes = await api.get(`/risikothemen/vertrag/${id}/final`);
+    finalEditorial.value = feRes.data;
+  } catch {
+    finalEditorial.value = null;
+  }
   // Default to best available view
-  if (risikothemen.value.length > 0) {
+  if (finalEditorial.value && finalEditorial.value.metriken.hat_editorial) {
+    ansicht.value = "final";
+  } else if (risikothemen.value.length > 0) {
     ansicht.value = "themen";
     // Load debug data in background
     api.get(`/risikothemen/vertrag/${id}/debug`).then(r => {

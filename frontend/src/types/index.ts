@@ -151,6 +151,51 @@ export interface ClusteringDebug {
   }>;
 }
 
+// --- Final Editorial Pass types ---
+
+export interface FinalesThemaFundstelle {
+  id: string;
+  kurzbeschreibung: string;
+  kategorie: string;
+  risikostufe: string;
+  textstelle: string;
+  pruef_status: string;
+  ist_primaer: boolean;
+}
+
+export interface FinalesThema {
+  id: string;
+  titel: string;
+  kategorie: string;
+  risikostufe: string;
+  kurzbeschreibung: string;
+  warum_verhandlungsrelevant: string;
+  alternativformulierung: string;
+  bieterfrage: string;
+  verhandlungsargumente: string[];
+  fundstellen: FinalesThemaFundstelle[];
+  sortierung: number;
+}
+
+export interface VerworfenesThema {
+  id: string;
+  titel: string;
+  kategorie: string;
+  grund: string;
+}
+
+export interface FinalEditorialResult {
+  finale_themen: FinalesThema[];
+  verworfene_themen: VerworfenesThema[];
+  metriken: {
+    anzahl_cluster_themen_vorher: number;
+    anzahl_finale_themen_nachher: number;
+    anzahl_verworfene_themen: number;
+    hat_editorial: boolean;
+    anzahl_ausgewaehlte_evidenzen: number;
+  };
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;

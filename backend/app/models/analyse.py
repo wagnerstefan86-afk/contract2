@@ -18,6 +18,7 @@ class AnalyseStatus(str, enum.Enum):
     PASS_4 = "Pass 4 läuft"
     CLUSTERING = "Clustering läuft"
     KONSOLIDIERUNG = "Konsolidierung"
+    EDITORIAL = "Final Editorial Pass"
     ABGESCHLOSSEN = "Abgeschlossen"
     FEHLGESCHLAGEN = "Fehlgeschlagen"
 

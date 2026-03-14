@@ -3,8 +3,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, Table, Column
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import String, Text, Integer, Boolean, DateTime, ForeignKey, Table, Column
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -31,6 +31,16 @@ class RisikoThema(Base):
     beschreibung: Mapped[str] = mapped_column(Text)
     sortierung: Mapped[int] = mapped_column(Integer, default=0)
     erstellt_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # --- Final Editorial Pass fields ---
+    # Whether this topic survived the final editorial reduction
+    final_selected: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Reason for rejection (only set if final_selected=False after editorial pass ran)
+    final_verwerfungsgrund: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Rich editorial output for selected topics (titel, kurzbeschreibung,
+    # warum_verhandlungsrelevant, alternativformulierung, bieterfrage,
+    # verhandlungsargumente, primaerfundstelle_id, sekundaerfundstelle_ids)
+    final_editorial: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     analyse = relationship("Analyse", back_populates="risikothemen")
     vertrag = relationship("Vertrag", back_populates="risikothemen")

@@ -32,6 +32,7 @@ from app.discovery.passes.themen_cluster import (
 )
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
+from app.discovery.final_editorial import final_editorial_pass
 from app.discovery.passes.base import RawFinding
 from app.models.risikothema import RisikoThema, risikothema_fundstellen
 
@@ -475,7 +476,147 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                    f"{metriken['anzahl_evidence_mehrfach_zugeordnet']} mehrfach zugeordnet.",
                    details=metriken)
 
-    # --- Step 7: Finalize with auswertung ---
+    # --- Step 7: Final Editorial Pass ---
+    if topic_clusters and len(resolved) > 0:
+        await _update_analyse(db, analyse, AnalyseStatus.EDITORIAL.value,
+                              "Final Editorial Pass", 95)
+        await _log(db, aid, vid,
+                   f"Final Editorial Pass gestartet: {len(resolved)} Themen reduzieren.")
+        await db.commit()
+
+        t0 = time.monotonic()
+
+        # Build input data for the editorial pass
+        editorial_input = []
+        # We need a mapping from resolved index to (RisikoThema, fundstellen)
+        # resolved was built earlier; we stored thema objects in DB already.
+        # Re-query is not needed — we can reconstruct from what we have.
+        resolved_thema_ids: list[uuid.UUID] = []
+        for idx, (cluster, linked_fs) in enumerate(resolved):
+            thema_data = {
+                "titel": cluster.titel,
+                "kategorie": cluster.kategorie,
+                "risikostufe": cluster.risikostufe,
+                "beschreibung": cluster.beschreibung,
+                "fundstellen": [
+                    {
+                        "kurzbeschreibung": fs.kurzbeschreibung,
+                        "textstelle": fs.textstelle[:300],
+                        "risikostufe": fs.risikostufe,
+                    }
+                    for fs in linked_fs
+                ],
+            }
+            editorial_input.append(thema_data)
+
+        editorial_result = await final_editorial_pass(
+            themen_daten=editorial_input,
+            text_laenge=len(full_text),
+            config=llm_config,
+        )
+        dur_editorial = round(time.monotonic() - t0, 1)
+
+        if editorial_result:
+            # We need to map resolved indices back to persisted RisikoThema objects.
+            # The themen were persisted earlier in Step 6b in the same order as `resolved`.
+            # Re-query them by analyse_id + sortierung to get the same order.
+            from sqlalchemy import select as sa_select
+            thema_result = await db.execute(
+                sa_select(RisikoThema)
+                .where(RisikoThema.analyse_id == aid)
+                .order_by(RisikoThema.sortierung)
+            )
+            persisted_themen = list(thema_result.scalars().all())
+
+            # Build a lookup: resolved_index -> persisted RisikoThema
+            # and resolved_index -> list of linked Fundstelle objects
+            resolved_fs_map: dict[int, list] = {}
+            for idx, (cluster, linked_fs) in enumerate(resolved):
+                resolved_fs_map[idx] = linked_fs
+
+            # Mark selected themes
+            selected_indices = {ft.quell_thema_index for ft in editorial_result.finale_themen}
+
+            for ft in editorial_result.finale_themen:
+                idx = ft.quell_thema_index
+                if idx < len(persisted_themen):
+                    thema = persisted_themen[idx]
+                    thema.final_selected = True
+                    thema.titel = ft.titel  # Use improved editorial title
+
+                    # Determine primary and secondary fundstelle IDs
+                    linked_fs = resolved_fs_map.get(idx, [])
+                    prim_id = None
+                    sek_ids = []
+                    if linked_fs and ft.primaerfundstelle_index < len(linked_fs):
+                        prim_id = str(linked_fs[ft.primaerfundstelle_index].id)
+                    elif linked_fs:
+                        prim_id = str(linked_fs[0].id)
+                    for si in ft.sekundaerfundstelle_indices:
+                        if si < len(linked_fs):
+                            sek_ids.append(str(linked_fs[si].id))
+
+                    thema.final_editorial = {
+                        "kurzbeschreibung": ft.kurzbeschreibung,
+                        "warum_verhandlungsrelevant": ft.warum_verhandlungsrelevant,
+                        "alternativformulierung": ft.alternativformulierung,
+                        "bieterfrage": ft.bieterfrage,
+                        "verhandlungsargumente": ft.verhandlungsargumente,
+                        "primaerfundstelle_id": prim_id,
+                        "sekundaerfundstelle_ids": sek_ids,
+                    }
+
+            for vt in editorial_result.verworfene_themen:
+                idx = vt.quell_thema_index
+                if idx < len(persisted_themen):
+                    thema = persisted_themen[idx]
+                    thema.final_selected = False
+                    thema.final_verwerfungsgrund = vt.grund
+
+            # Also mark any themes not mentioned as not selected
+            mentioned = selected_indices | {vt.quell_thema_index for vt in editorial_result.verworfene_themen}
+            for idx, thema in enumerate(persisted_themen):
+                if idx not in mentioned:
+                    thema.final_selected = False
+                    thema.final_verwerfungsgrund = "Vom LLM nicht adressiert"
+
+            await db.flush()
+
+            anzahl_finale = len(editorial_result.finale_themen)
+            anzahl_verworfen = len(persisted_themen) - anzahl_finale
+            auswertung["final_editorial"] = {
+                "anzahl_cluster_themen_vorher": len(persisted_themen),
+                "anzahl_finale_themen_nachher": anzahl_finale,
+                "anzahl_verworfene_themen": anzahl_verworfen,
+                "dauer_sekunden": dur_editorial,
+                "finale_themen": [
+                    {"titel": ft.titel, "kategorie": ft.kategorie, "risikostufe": ft.risikostufe}
+                    for ft in editorial_result.finale_themen
+                ],
+                "verworfene_themen": [
+                    {"index": vt.quell_thema_index, "grund": vt.grund}
+                    for vt in editorial_result.verworfene_themen
+                ],
+            }
+            auswertung["zeiten"]["editorial_sekunden"] = dur_editorial
+
+            await _log(db, aid, vid,
+                       f"Final Editorial Pass abgeschlossen: {anzahl_finale} finale Themen "
+                       f"aus {len(persisted_themen)} Cluster-Themen in {dur_editorial}s. "
+                       f"{anzahl_verworfen} Themen verworfen.",
+                       details=auswertung["final_editorial"])
+        else:
+            auswertung["final_editorial"] = {
+                "status": "uebersprungen",
+                "dauer_sekunden": dur_editorial,
+            }
+            await _log(db, aid, vid,
+                       "Final Editorial Pass übersprungen (LLM-Ergebnis ungültig).",
+                       ebene=ProtokollEbene.WARNUNG.value)
+
+        await db.commit()
+
+    # --- Step 8: Finalize with auswertung ---
     total_duration = round(time.monotonic() - pipeline_start, 1)
     auswertung["zeiten"]["gesamt_sekunden"] = total_duration
 
