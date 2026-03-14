@@ -128,7 +128,7 @@ def _merge_into(primary: ConsolidatedFinding, secondary: RawFinding,
         pf.empfehlung = secondary.empfehlung
 
     # Escalate risk level if the duplicate is rated higher
-    risk_order = {"Hoch": 3, "Mittel": 2, "Niedrig": 1, "Hinweis": 0}
+    risk_order = {"Kritisch": 4, "Hoch": 3, "Mittel": 2, "Niedrig": 1, "Hinweis": 0}
     if risk_order.get(secondary.risikostufe, 0) > risk_order.get(pf.risikostufe, 0):
         pf.risikostufe = secondary.risikostufe
 

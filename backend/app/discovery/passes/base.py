@@ -27,39 +27,73 @@ class RawFinding:
     verhandlungsargumente: str = ""  # Arguments for negotiation
 
 
-# Shared recall-maximizing instruction block appended to all pass prompts
-RECALL_INSTRUCTION = """
-KRITISCH — RECALL-MAXIMIERUNG:
-- Dein Ziel ist es, MÖGLICHST VIELE potenziell problematische Stellen zu finden, nicht nur die "wichtigsten" oder "offensichtlichsten".
-- Erstelle KEINE priorisierte Kurzliste. Erstelle eine VOLLSTÄNDIGE Liste.
-- Auch Stellen mit niedrigem Risiko oder bloßem Hinweischarakter MÜSSEN aufgenommen werden.
-- Wenn eine Formulierung auch nur MÖGLICHERWEISE ein Risiko darstellt, nimm sie auf.
-- Fehlende Regelungen (z.B. keine Haftungsobergrenze) sind AUCH Fundstellen.
-- Einseitige Rechte des Auftraggebers sind IMMER eine Fundstelle.
-- Verweise auf externe Dokumente, Anlagen oder Standards sind IMMER eine Fundstelle.
-- Vage Formulierungen ("angemessen", "marktüblich", "Stand der Technik") sind IMMER eine Fundstelle.
-- Liefere lieber 20 Fundstellen als 5. Überinklusion wird NICHT bestraft, Unterinklusion SCHON.
+# Shared quality rules appended to all pass prompts
+QUALITAETS_REGELN = """
+REGEL 1 – FINDINGS SPARSAM ERZEUGEN
+Erstelle nur ein neues Finding, wenn wirklich ein eigener Risikokern vorliegt.
+Wenn mehrere Textstellen denselben Risikotyp betreffen (z.B. Weisungsrecht, Auditpflichten, Berichtspflichten), dann:
+- erstelle EIN Hauptfinding
+- ergänze weitere Stellen als Unteraspekte in der Erklärung
+NICHT mehrere separate Findings für denselben Risikotyp.
+
+REGEL 2 – IGNORIERE UNKRITISCHE PASSAGEN
+Ignoriere insbesondere:
+- rein deklarative Vertragsformeln
+- neutrale Definitionen
+- Standardfloskeln ohne operative Folgen
+- Wiederholungen bereits erkannter Risiken
+- rein organisatorische Formulierungen ohne Risiko
+
+REGEL 3 – VERMEIDE GENERISCHE KOMMENTARE
+Formulierungen wie "Dies könnte problematisch sein", "Es wäre zu prüfen", "Es sollte geklärt werden" sind NICHT erlaubt.
+Erkläre konkret: welches Risiko entsteht, warum es entsteht, für wen es entsteht, welche Konsequenz droht.
+
+REGEL 4 – RISIKOSTUFEN
+Bewerte jedes Finding nach realer Verhandlungsrelevanz:
+- Kritisch: Existenzielle Risiken oder unbegrenzte Haftung
+- Hoch: Deutliche wirtschaftliche oder operative Risiken
+- Mittel: Verhandelbare, aber kontrollierbare Risiken
+- Niedrig: Hinweis ohne unmittelbare Gefahr
+Vermeide Risiko-Inflation. Nicht alles ist "hoch" oder "kritisch".
+
+REGEL 5 – VERHANDLUNGSORIENTIERUNG
+Zu jedem Finding musst du liefern:
+1. Risikoerklärung (konkret, nicht generisch)
+2. Konkrete Empfehlung
+3. Mögliche Alternativformulierung (konkreter Textvorschlag)
+4. Bieterfrage für die Verhandlung
+5. Argumente, warum die Anpassung auch für den Auftraggeber sinnvoll ist
+
+REGEL 6 – KEINE DOPPELTEN FINDINGS
+Wenn eine ähnliche Klausel mehrfach vorkommt, füge sie als zusätzliche Textstelle zu einem bestehenden Finding hinzu.
+Bei einem Vertrag von ca. 15 Seiten sollen typischerweise 20 bis maximal 80 Findings entstehen.
 """.strip()
 
 # Shared JSON schema instruction
 FINDING_JSON_SCHEMA = """
 Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 {
-  "textstelle": "exaktes Zitat aus dem Vertrag (möglichst wörtlich, MINDESTENS ein vollständiger Satz, besser der ganze relevante Absatz)",
-  "kategorie": "eine der Kategorien: Informationssicherheit, Datenschutz, Compliance & Regulatorik, Verfügbarkeit & Betrieb, Haftung & Gewährleistung, Audit & Berichtswesen, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten",
-  "kurzbeschreibung": "kurzer Titel der Feststellung",
-  "erklaerung": "KONKRETE Erklärung: (1) Was genau ist das Risiko? (2) Warum ist das für einen IT-Dienstleister/Auftragnehmer problematisch? (3) Welche operative, vertragliche oder regulatorische Konsequenz droht konkret? Keine generischen Phrasen.",
-  "empfehlung": "Konkrete Handlungsempfehlung für den Auftragnehmer",
-  "risikostufe": "Hoch oder Mittel oder Niedrig oder Hinweis",
-  "risiko_detail": "Präzise Einordnung: Welche konkrete Gefahr droht (z.B. unbegrenzte Kostenpflicht, Vertragsstrafe, regulatorisches Bußgeld, operative Überlastung)? Für wen genau? In welchem Szenario wird das Risiko schlagend?",
-  "alternativformulierung": "Vorschlag für eine faire Alternativformulierung der Vertragsklausel, die das Risiko für den AN begrenzt, ohne den Vertragszweck zu gefährden. Konkreter Textvorschlag.",
-  "bieterfrage": "Frage, die der Bieter/AN im Vergabeverfahren oder in der Verhandlung stellen sollte, um Klarheit zu schaffen. Kurz und präzise.",
-  "verhandlungsargumente": "1-3 sachliche Argumente, warum eine Anpassung dieser Klausel auch im Interesse des AG liegt oder marktüblich wäre."
+  "textstelle": "Originaltext aus dem Vertrag (möglichst wörtlich, MINDESTENS ein vollständiger Satz, besser der ganze relevante Absatz)",
+  "kategorie": "z.B. Weisungsrecht, Audit, Haftung, Reporting, Compliance, SLA, Subunternehmer, Informationssicherheit, Datenschutz, Verfügbarkeit & Betrieb, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten",
+  "kurzbeschreibung": "kurzer präziser Titel des Problems",
+  "erklaerung": "KONKRETE Erklärung: (1) Welches Risiko entsteht? (2) Warum entsteht es? (3) Für wen entsteht es? (4) Welche Konsequenz droht? KEINE generischen Phrasen wie 'könnte problematisch sein' oder 'wäre zu prüfen'.",
+  "empfehlung": "Was sollte konkret geändert werden",
+  "risikostufe": "Kritisch oder Hoch oder Mittel oder Niedrig",
+  "risiko_detail": "Welche konkreten Konsequenzen für den Auftragnehmer entstehen (z.B. unbegrenzte Kostenpflicht, Vertragsstrafe, regulatorisches Bußgeld, operative Überlastung). Für wen genau? In welchem Szenario?",
+  "alternativformulierung": "Konkrete Vertragsformulierung als Textvorschlag, die das Risiko begrenzt ohne den Vertragszweck zu gefährden.",
+  "bieterfrage": "Frage, die der Bieter im Vergabeverfahren stellen sollte, um Klarheit zu schaffen.",
+  "verhandlungsargumente": ["Argument 1: warum die Anpassung auch im AG-Interesse liegt", "Argument 2: Marktüblichkeit oder Best Practice"]
 }
 
-Wenn du KEINE Feststellungen findest, antworte mit einem leeren Array: []
-ABER: Es ist extrem unwahrscheinlich, dass ein Vertragsabschnitt KEINE Fundstelle enthält. Prüfe nochmals, bevor du ein leeres Array zurückgibst.
+Wenn du KEINE verhandlungsrelevanten Feststellungen findest, antworte mit einem leeren Array: []
 """.strip()
+
+
+def _format_verhandlungsargumente(value) -> str:
+    """Convert verhandlungsargumente from list or string to a formatted string."""
+    if isinstance(value, list):
+        return "\n".join(f"- {arg}" for arg in value if arg)
+    return str(value) if value else ""
 
 
 class DiscoveryPass(ABC):
@@ -96,7 +130,7 @@ class DiscoveryPass(ABC):
                     risiko_detail=str(item.get("risiko_detail", "")),
                     alternativformulierung=str(item.get("alternativformulierung", "")),
                     bieterfrage=str(item.get("bieterfrage", "")),
-                    verhandlungsargumente=str(item.get("verhandlungsargumente", "")),
+                    verhandlungsargumente=_format_verhandlungsargumente(item.get("verhandlungsargumente", "")),
                 ))
             except Exception:
                 continue

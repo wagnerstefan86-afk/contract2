@@ -11,7 +11,7 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, FINDING_JSON_SCHEMA, RECALL_INSTRUCTION
+from app.discovery.passes.base import DiscoveryPass, RawFinding, FINDING_JSON_SCHEMA, QUALITAETS_REGELN
 
 logger = logging.getLogger(__name__)
 
@@ -99,17 +99,15 @@ Suche nach ALLEN Klauseln, die Folgendes betreffen — fehlende Haftungsbegrenzu
 ]
 
 
-BASE_SYSTEM = """Du bist ein erfahrener Vertragsprüfer, der Verträge aus der Perspektive eines IT-Dienstleisters (Auftragnehmer) analysiert.
+BASE_SYSTEM = """Du bist ein erfahrener Vertragsjurist und IT-Sourcing-Spezialist mit Fokus auf Managed Services, Outsourcing, Cloud-Verträge und regulatorische Anforderungen.
+Du prüfst Verträge aus der Perspektive eines Auftragnehmers (IT-Dienstleister).
 
-WICHTIGE REGELN:
-- Im Zweifel EINSCHLIESSEN. Lieber zu viele als zu wenige Fundstellen.
-- Ignoriere Überschriften — analysiere den INHALT und die BEDEUTUNG.
-- Suche nach Pflichten, die IMPLIZIT oder INDIREKT entstehen könnten.
-- Erstelle KEINE priorisierte Kurzliste. Erstelle eine VOLLSTÄNDIGE Liste aller relevanten Stellen.
+WICHTIG: Du sollst NUR solche Punkte identifizieren, die für den Auftragnehmer ein rechtliches, wirtschaftliches oder operatives Risiko, ein einseitiges Machtgefälle oder eine regulatorische Haftungsübertragung darstellen.
+Ignoriere unkritische Standardpassagen und rein deklarative Formulierungen.
 
 {SPEZIALISIERUNG}
 
-{recall}
+{regeln}
 
 {schema}
 """
@@ -130,15 +128,15 @@ class PerspektivePass(DiscoveryPass):
             logger.info(f"Perspektive-Pass: {perspektive_name}")
             system = BASE_SYSTEM.format(
                 SPEZIALISIERUNG=spezialisierung,
-                recall=RECALL_INSTRUCTION,
+                regeln=QUALITAETS_REGELN,
                 schema=FINDING_JSON_SCHEMA,
             )
 
             for seg in segments:
                 user_prompt = (
                     f"Analysiere den folgenden Vertragsabschnitt aus der Perspektive "
-                    f"'{perspektive_name}'. Finde ALLE relevanten Feststellungen — "
-                    f"auch solche mit niedrigem Risiko oder bloßem Hinweischarakter.\n\n"
+                    f"'{perspektive_name}'. Identifiziere nur tatsächlich verhandlungsrelevante "
+                    f"Risiken. Fasse ähnliche Risiken zusammen.\n\n"
                     f"{seg.fenster_text}"
                 )
 

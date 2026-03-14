@@ -1,8 +1,8 @@
 """Pass 1: Breite Ersterfassung — broad initial scan.
 
-Goal: cast the widest net. Scan every segment for ANY clause that could
-create an obligation, risk, liability, restriction, or commitment for
-the Auftragnehmer. Over-include rather than miss anything.
+Goal: scan every segment for clauses that create real obligations, risks,
+liabilities, restrictions, or commitments for the Auftragnehmer.
+Focus on verhandlungsrelevante findings, not exhaustive coverage.
 """
 
 from __future__ import annotations
@@ -11,20 +11,25 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, FINDING_JSON_SCHEMA, RECALL_INSTRUCTION
+from app.discovery.passes.base import DiscoveryPass, RawFinding, FINDING_JSON_SCHEMA, QUALITAETS_REGELN
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = f"""Du bist ein erfahrener Vertragsprüfer, der Verträge aus der Perspektive eines IT-Dienstleisters (Auftragnehmer) analysiert.
+SYSTEM_PROMPT = f"""Du bist ein erfahrener Vertragsjurist und IT-Sourcing-Spezialist mit Fokus auf Managed Services, Outsourcing, Cloud-Verträge und regulatorische Anforderungen (BAIT, MaRisk, DORA, ISO 27001).
+Deine Aufgabe ist es, einen Vertrag aus Sicht eines Auftragnehmers (Dienstleister) zu prüfen.
 
-Deine Aufgabe ist eine BREITE ERSTERFASSUNG aller potenziell problematischen Stellen.
+WICHTIG: Du sollst NICHT jede Klausel kommentieren.
+Du sollst nur solche Punkte identifizieren, die für den Auftragnehmer:
+- ein rechtliches Risiko
+- ein wirtschaftliches Risiko
+- eine operative Überlastung
+- ein einseitiges Machtgefälle
+- oder eine regulatorische Haftungsübertragung
+darstellen.
 
-WICHTIGE REGELN:
-- Identifiziere JEDE Klausel, jeden Satz oder jede Formulierung, die eine Verpflichtung, ein Risiko, eine Haftung, eine Einschränkung oder eine Zusage für den Auftragnehmer schaffen KÖNNTE.
-- Im Zweifel EINSCHLIESSEN, nicht ausschließen. Lieber zu viele als zu wenige Fundstellen.
-- Ignoriere Überschriften und Abschnittsnummern — analysiere den INHALT und die BEDEUTUNG.
-- Auch harmlos klingende Formulierungen können versteckte Pflichten enthalten.
-- Achte besonders auf:
+ZIEL: Ein Reviewer soll aus deiner Analyse schnell erkennen, welche Punkte tatsächlich verhandlungsrelevant sind.
+
+Achte besonders auf:
   * Fristen und Reaktionszeiten (unrealistisch kurz?)
   * Strafklauseln und Pönalen (unverhältnismäßig?)
   * Haftungsregelungen (fehlt eine Obergrenze? unbeschränkt?)
@@ -36,7 +41,7 @@ WICHTIGE REGELN:
   * Automatische Verlängerungen und lange Bindungsfristen
   * Transitionspflichten und Mitwirkungspflichten bei Vertragsende
 
-{RECALL_INSTRUCTION}
+{QUALITAETS_REGELN}
 
 {FINDING_JSON_SCHEMA}"""
 
@@ -56,8 +61,8 @@ class BreitPass(DiscoveryPass):
             logger.info(f"Breit-Pass: Segment {seg.id}")
             user_prompt = (
                 f"Analysiere den folgenden Vertragsabschnitt. "
-                f"Finde ALLE potenziell problematischen Stellen für den Auftragnehmer. "
-                f"Denke daran: Lieber 10 Fundstellen als 3. Überinklusion ist gewünscht.\n\n"
+                f"Identifiziere nur tatsächlich verhandlungsrelevante Risiken für den Auftragnehmer. "
+                f"Fasse ähnliche Risiken zusammen. Ignoriere unkritische Standardpassagen.\n\n"
                 f"{seg.fenster_text}"
             )
 
