@@ -1,0 +1,168 @@
+policy_profile:
+  name: "InfoSec Core Review"
+  version: "1.0.0"
+  description: "Standard-Regelprofil für IT-Outsourcing InfoSec-Vertragsprüfungen"
+
+rules:
+  # --- Privacy / Datenschutz: Out of Scope ---
+  - name: "privacy-out-of-scope"
+    description: "Datenschutzthemen aus der InfoSec-Prüfung aussondern"
+    rule_type: "SCOPE_ROUTING"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "KEYWORD_SET"
+    pattern:
+      - "DSGVO"
+      - "GDPR"
+      - "Datenschutz"
+      - "Auftragsverarbeitung"
+      - "AVV"
+      - "TOM"
+      - "Betroffenenrechte"
+      - "Datenschutzbeauftragter"
+      - "Verantwortlicher"
+      - "Auftragsverarbeiter"
+    action: "OUT_OF_SCOPE"
+    priority: 100
+
+  # --- BCM / ITSCM: Always Review ---
+  - name: "bcm-itscm-always-review"
+    description: "BCM/ITSCM/Notfall-Themen dürfen niemals unterdrückt werden"
+    rule_type: "TOPIC_SUPPRESSION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "KEYWORD_SET"
+    pattern:
+      - "Notfallmanagement"
+      - "Business Continuity"
+      - "BCM"
+      - "ITSCM"
+      - "Disaster Recovery"
+      - "Wiederanlauf"
+      - "Wiederherstellung"
+      - "Recovery Time"
+      - "Recovery Point"
+      - "RTO"
+      - "RPO"
+      - "Backup"
+      - "Restore"
+      - "Exit"
+      - "Migration"
+    action: "REQUIRE_REVIEW"
+    priority: 95
+
+  # --- Certifications: Positive Controls ---
+  - name: "cert-iso27001"
+    description: "ISO/IEC 27001 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\/?IEC\\s*27001|ISO\\s*27001)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-iso27017"
+    description: "ISO/IEC 27017 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\/?IEC\\s*27017|ISO\\s*27017)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-iso27018"
+    description: "ISO/IEC 27018 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\/?IEC\\s*27018|ISO\\s*27018)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-iso22301"
+    description: "ISO 22301 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\s*22301)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-iso27005"
+    description: "ISO 27005 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\s*27005)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-iso31000"
+    description: "ISO 31000 als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISO\\s*31000)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  - name: "cert-isae3402-type2-dc-only"
+    description: "ISAE 3402 Type II nur für Rechenzentrums-/Hosting-Scope"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(ISAE\\s*3402\\s*Type\\s*II)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 82
+    conditions_json:
+      only_for_datacenter_operations: true
+      provider_scope_relevant: true
+
+  - name: "cert-tisax"
+    description: "TISAX als positive control erkennen"
+    rule_type: "CERTIFICATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "REGEX"
+    pattern: "(?i)(TISAX)"
+    action: "MARK_POSITIVE_CONTROL"
+    priority: 80
+    conditions_json:
+      provider_scope_relevant: true
+
+  # --- Geo Location: Suppress if no third-country indicator ---
+  - name: "location-germany"
+    description: "Datenstandort Deutschland als akzeptabel erkennen"
+    rule_type: "GEO_LOCATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "KEYWORD_SET"
+    pattern:
+      - "Deutschland"
+      - "Germany"
+    action: "SUPPRESS_RISK"
+    priority: 60
+    conditions_json:
+      no_third_country_indicator: true
+
+  - name: "location-eu"
+    description: "Datenstandort EU als akzeptabel erkennen"
+    rule_type: "GEO_LOCATION"
+    match_scope: "SECTION_TEXT"
+    pattern_type: "KEYWORD_SET"
+    pattern:
+      - "EU"
+      - "Europäische Union"
+      - "European Union"
+    action: "SUPPRESS_RISK"
+    priority: 60
+    conditions_json:
+      no_third_country_indicator: true

@@ -53,6 +53,16 @@ async def _bootstrap_admin():
             logger.info(f"Initial-Admin '{admin.email}' erstellt")
 
 
+async def _seed_policies():
+    """Seed the default policy profile on startup if none exists."""
+    try:
+        from app.services.policy_seed import seed_policy_profile
+        async with async_session() as db:
+            await seed_policy_profile(db)
+    except Exception as e:
+        logger.warning(f"Policy-Seed übersprungen: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on startup (replace with alembic migrations later)
@@ -60,6 +70,8 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     # Bootstrap admin user
     await _bootstrap_admin()
+    # Seed policy profile
+    await _seed_policies()
     yield
 
 

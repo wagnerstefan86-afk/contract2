@@ -9,6 +9,8 @@ from app.api.einstellungen import router as einstellungen_router
 from app.api.protokoll import router as protokoll_router
 from app.api.demo import router as demo_router
 from app.api.risikothemen import router as risikothemen_router
+from app.api.cases import router as cases_router
+from app.api.policy import router as policy_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -20,3 +22,5 @@ api_router.include_router(risikothemen_router)
 api_router.include_router(einstellungen_router)
 api_router.include_router(protokoll_router)
 api_router.include_router(demo_router)
+api_router.include_router(cases_router)
+api_router.include_router(policy_router)

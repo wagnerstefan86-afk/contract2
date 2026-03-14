@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey
+from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +48,30 @@ class Fundstelle(Base):
     # Consolidation debug: how many raw candidates were merged into this finding
     zusammenfuehrung: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # --- Case-based pipeline extensions (nullable for backward compat) ---
+    analysis_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("analysis_cases.id", ondelete="CASCADE"), nullable=True
+    )
+    case_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_documents.id", ondelete="SET NULL"), nullable=True
+    )
+    document_section_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_sections.id", ondelete="SET NULL"), nullable=True
+    )
+    extraction_pass: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Policy engine flags
+    is_positive_control: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_suppressed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_out_of_scope: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    out_of_scope_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    suppression_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("policy_rules.id", ondelete="SET NULL"), nullable=True
+    )
+    normalized_risk_core: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    # Relationships
     analyse = relationship("Analyse", back_populates="fundstellen")
     vertrag = relationship("Vertrag", back_populates="fundstellen")
     risikothemen = relationship("RisikoThema", secondary="risikothema_fundstellen", back_populates="fundstellen")

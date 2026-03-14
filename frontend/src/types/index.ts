@@ -196,6 +196,98 @@ export interface FinalEditorialResult {
   };
 }
 
+// --- Analysis Case types (multi-document) ---
+
+export interface CaseDocument {
+  id: string;
+  analysis_case_id: string;
+  filename: string;
+  original_mime_type: string | null;
+  sha256: string | null;
+  page_count: number | null;
+  char_count: number | null;
+  language: string | null;
+  document_type: string;
+  document_role_rank: number;
+  status: string;
+  parse_status: string;
+  classification_status: string;
+  created_at: string;
+  error_message: string | null;
+}
+
+export interface AnalysisCase {
+  id: string;
+  external_case_ref: string | null;
+  title: string;
+  customer_name: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  total_documents: number;
+  total_pages: number;
+  total_characters: number;
+  total_chunks: number;
+  total_findings: number;
+  total_themes: number;
+  total_final_themes: number;
+  failure_reason: string | null;
+  documents?: CaseDocument[];
+  processing_summary?: Record<string, unknown> | null;
+}
+
+export interface PositiveControl {
+  id: string;
+  analysis_case_id: string;
+  case_document_id: string;
+  document_section_id: string | null;
+  control_type: string;
+  control_value: string;
+  source_text: string;
+  status: string;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface DocumentSection {
+  id: string;
+  case_document_id: string;
+  section_index: number;
+  page_from: number | null;
+  page_to: number | null;
+  heading_path: string | null;
+  section_type: string;
+  char_count: number;
+  token_estimate: number;
+  routing: string | null;
+  routing_reason: string | null;
+}
+
+export interface PolicyRule {
+  id: string;
+  name: string;
+  description: string | null;
+  rule_type: string;
+  match_scope: string;
+  pattern_type: string;
+  action: string;
+  priority: number;
+  is_active: boolean;
+  conditions_json: Record<string, unknown> | null;
+}
+
+export interface PolicyProfile {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  rules: PolicyRule[];
+}
+
 export interface Einstellung {
   id: string;
   schluessel: string;
