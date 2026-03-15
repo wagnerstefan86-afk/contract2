@@ -653,11 +653,41 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     analyse.beendet_am = datetime.utcnow()
     vertrag.status = VertragStatus.ANALYSIERT.value
 
+    # Count evidence across persisted fundstellen
+    evidence_count = sum(
+        1 for fs in persisted_fundstellen
+        if fs.scope_text or fs.textstelle
+    )
+    # Count kernthemen (final_selected themes)
+    kernthemen_count = 0
+    try:
+        if topic_clusters and editorial_result:
+            kernthemen_count = len(editorial_result.finale_themen)
+    except NameError:
+        pass
+
+    analysis_stats = {
+        "raw_findings": dedup_result.raw_before,
+        "after_dedup": dedup_result.raw_after,
+        "after_consolidation": len(consolidated),
+        "clusters": len(topic_clusters) if topic_clusters else 0,
+        "kernthemen": kernthemen_count,
+        "evidence_count": evidence_count,
+    }
+    auswertung["analysis_stats"] = analysis_stats
+
     await _log(db, aid, vid,
                f"Analyse abgeschlossen in {total_duration}s. "
                f"{len(consolidated)} Fundstellen gespeichert "
                f"(aus {total_raw} Rohkandidaten).",
                details=auswertung)
+    logger.info(
+        f"Pipeline summary: raw_findings={analysis_stats['raw_findings']}, "
+        f"after_dedup={analysis_stats['after_dedup']}, "
+        f"clusters={analysis_stats['clusters']}, "
+        f"kernthemen={analysis_stats['kernthemen']}, "
+        f"evidence_count={analysis_stats['evidence_count']}"
+    )
     logger.info(f"Pipeline final commit: {len(consolidated)} Fundstellen, "
                 f"{len(topic_clusters) if topic_clusters else 0} Themen")
     await db.commit()

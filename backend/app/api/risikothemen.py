@@ -1,5 +1,6 @@
 """API endpoints for RisikoThema (LLM-generated topic clusters)."""
 
+import logging
 import uuid
 from collections import Counter
 
@@ -14,6 +15,7 @@ from app.models.benutzer import Benutzer
 from app.models.fundstelle import Fundstelle
 from app.models.risikothema import RisikoThema
 from app.schemas.risikothema import (
+    EvidenceItem,
     RisikoThemaResponse,
     FinalEditorialResponse,
     FinalesThemaResponse,
@@ -22,7 +24,62 @@ from app.schemas.risikothema import (
 )
 from app.discovery.passes.themen_cluster import berechne_titel_aehnlichkeit
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/risikothemen", tags=["Risikothemen"])
+
+# Maximum evidence items per theme in the response
+MAX_EVIDENCES_PER_THEME = 5
+
+
+def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) -> list[EvidenceItem]:
+    """Extract deduplicated evidence items from Fundstelle objects.
+
+    Falls back to textstelle if scope_text is missing.
+    Returns at most `limit` items.
+    """
+    seen_texts: set[str] = set()
+    evidences: list[EvidenceItem] = []
+
+    # Sort: prefer fundstellen with scope_text, then by text length descending
+    sorted_fs = sorted(
+        fundstellen,
+        key=lambda fs: (
+            bool(getattr(fs, "scope_text", None)),
+            len(getattr(fs, "scope_text", None) or getattr(fs, "textstelle", "") or ""),
+        ),
+        reverse=True,
+    )
+
+    for fs in sorted_fs:
+        scope_text = getattr(fs, "scope_text", None) or ""
+        # Fallback to textstelle if no scope_text
+        if not scope_text:
+            scope_text = getattr(fs, "textstelle", None) or ""
+        if not scope_text:
+            continue
+
+        # Deduplicate by normalized text
+        dedup_key = scope_text.strip().lower()[:200]
+        if dedup_key in seen_texts:
+            continue
+        seen_texts.add(dedup_key)
+
+        # Extract segment_id
+        absatz_ids = getattr(fs, "absatz_ids", None)
+        segment_id = absatz_ids[0] if absatz_ids and isinstance(absatz_ids, list) else None
+
+        evidences.append(EvidenceItem(
+            scope_text=scope_text,
+            segment_id=segment_id,
+            trigger_spans=getattr(fs, "trigger_spans", None),
+            heading_path=getattr(fs, "evidence_heading_path", None),
+        ))
+
+        if len(evidences) >= limit:
+            break
+
+    return evidences
 
 
 @router.get("/vertrag/{vertrag_id}", response_model=list[RisikoThemaResponse])
@@ -31,14 +88,24 @@ async def risikothemen_fuer_vertrag(
     user: Benutzer = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all risk topics for a contract, with nested findings."""
+    """Return all risk topics for a contract, with nested findings and evidences."""
     result = await db.execute(
         select(RisikoThema)
         .where(RisikoThema.vertrag_id == vertrag_id)
         .options(selectinload(RisikoThema.fundstellen))
         .order_by(RisikoThema.sortierung)
     )
-    return result.scalars().all()
+    themen = result.scalars().all()
+
+    # Build response with computed evidences from fundstellen
+    responses = []
+    for thema in themen:
+        evidences = _build_evidences(thema.fundstellen)
+        resp = RisikoThemaResponse.model_validate(thema)
+        resp.evidences = evidences
+        responses.append(resp)
+
+    return responses
 
 
 @router.get("/vertrag/{vertrag_id}/final", response_model=FinalEditorialResponse)
@@ -108,6 +175,24 @@ async def finale_themen_fuer_vertrag(
                 # Sort: primary first
                 fundstellen_out.sort(key=lambda f: (not f.ist_primaer, str(f.id)))
 
+                # Build evidences from all theme fundstellen (not just primary/secondary)
+                evidences = _build_evidences(thema.fundstellen)
+
+                # Safety guard: if zero evidences, fallback to longest textstelle
+                if not evidences and thema.fundstellen:
+                    best_fs = max(thema.fundstellen, key=lambda fs: len(fs.textstelle or ""))
+                    absatz_ids = getattr(best_fs, "absatz_ids", None)
+                    evidences = [EvidenceItem(
+                        scope_text=best_fs.textstelle,
+                        segment_id=absatz_ids[0] if absatz_ids and isinstance(absatz_ids, list) else None,
+                        trigger_spans=getattr(best_fs, "trigger_spans", None),
+                        heading_path=getattr(best_fs, "evidence_heading_path", None),
+                    )]
+                    logger.warning(
+                        f"Kernthema '{thema.titel}': zero evidences from scope_text, "
+                        f"falling back to textstelle"
+                    )
+
                 finale_themen.append(FinalesThemaResponse(
                     id=thema.id,
                     titel=thema.titel,
@@ -119,6 +204,7 @@ async def finale_themen_fuer_vertrag(
                     bieterfrage=ed.get("bieterfrage", ""),
                     verhandlungsargumente=ed.get("verhandlungsargumente", []),
                     fundstellen=fundstellen_out,
+                    evidences=evidences,
                     sortierung=thema.sortierung,
                 ))
             elif not thema.final_selected:

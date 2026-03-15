@@ -8,6 +8,14 @@ from uuid import UUID
 from pydantic import BaseModel, computed_field
 
 
+class EvidenceItem(BaseModel):
+    """A single piece of contract evidence supporting a risk theme."""
+    scope_text: str
+    segment_id: str | None = None
+    trigger_spans: list[str] | None = None
+    heading_path: str | None = None
+
+
 class RisikoThemaFundstelleResponse(BaseModel):
     """Lightweight Fundstelle representation nested inside a RisikoThema."""
     id: UUID
@@ -37,6 +45,7 @@ class RisikoThemaResponse(BaseModel):
     sortierung: int
     erstellt_am: datetime
     fundstellen: list[RisikoThemaFundstelleResponse]
+    evidences: list[EvidenceItem] = []
     final_selected: bool = False
     final_verwerfungsgrund: str | None = None
     final_editorial: dict | None = None
@@ -81,6 +90,7 @@ class FinalesThemaResponse(BaseModel):
     bieterfrage: str
     verhandlungsargumente: list[str]
     fundstellen: list[FinalesThemaFundstelleResponse]
+    evidences: list[EvidenceItem] = []
     sortierung: int
 
 

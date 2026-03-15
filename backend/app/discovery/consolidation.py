@@ -142,3 +142,23 @@ def _merge_into(primary: ConsolidatedFinding, secondary: RawFinding,
         pf_val = getattr(pf, attr, "")
         if len(sec_val) > len(pf_val):
             setattr(pf, attr, sec_val)
+
+    # Preserve evidence fields: keep longer/richer scope_text and merge trigger_spans
+    sec_scope = getattr(secondary, "scope_text", "") or ""
+    pf_scope = getattr(pf, "scope_text", "") or ""
+    if len(sec_scope) > len(pf_scope):
+        pf.scope_text = secondary.scope_text
+        pf.scope_type = secondary.scope_type or pf.scope_type
+    if not pf.scope_type and secondary.scope_type:
+        pf.scope_type = secondary.scope_type
+    # Merge trigger_spans (deduplicated)
+    existing_spans = set(pf.trigger_spans) if pf.trigger_spans else set()
+    for span in (secondary.trigger_spans or []):
+        if span not in existing_spans:
+            pf.trigger_spans.append(span)
+            existing_spans.add(span)
+    # Keep longer evidence_heading_path
+    sec_heading = getattr(secondary, "evidence_heading_path", "") or ""
+    pf_heading = getattr(pf, "evidence_heading_path", "") or ""
+    if len(sec_heading) > len(pf_heading):
+        pf.evidence_heading_path = secondary.evidence_heading_path
