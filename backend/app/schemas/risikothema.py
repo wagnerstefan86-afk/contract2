@@ -16,6 +16,11 @@ class RisikoThemaFundstelleResponse(BaseModel):
     risikostufe: str
     textstelle: str
     pruef_status: str
+    # Paragraph-level evidence (nullable for legacy findings)
+    scope_type: str | None = None
+    scope_text: str | None = None
+    trigger_spans: list | None = None
+    evidence_heading_path: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -55,6 +60,11 @@ class FinalesThemaFundstelleResponse(BaseModel):
     textstelle: str
     pruef_status: str
     ist_primaer: bool = False
+    # Paragraph-level evidence (nullable for legacy findings)
+    scope_type: str | None = None
+    scope_text: str | None = None
+    trigger_spans: list | None = None
+    evidence_heading_path: str | None = None
 
     model_config = {"from_attributes": True}
 

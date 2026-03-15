@@ -70,6 +70,13 @@ export interface Fundstelle {
   erstellt_am: string;
   detail: FundstelleDetail | null;
   zusammenfuehrung: Record<string, unknown> | null;
+  // Paragraph-level evidence fields
+  scope_type: string | null;
+  scope_text: string | null;
+  trigger_spans: string[] | null;
+  evidence_heading_path: string | null;
+  evidence_page_from: number | null;
+  evidence_page_to: number | null;
 }
 
 export interface FundstellenGruppe {
@@ -161,6 +168,11 @@ export interface FinalesThemaFundstelle {
   textstelle: string;
   pruef_status: string;
   ist_primaer: boolean;
+  // Paragraph-level evidence fields
+  scope_type: string | null;
+  scope_text: string | null;
+  trigger_spans: string[] | null;
+  evidence_heading_path: string | null;
 }
 
 export interface FinalesThema {
@@ -299,6 +311,11 @@ export interface ThemeEvidence {
   kategorie: string | null;
   risikostufe: string | null;
   textstelle: string | null;
+  // Paragraph-level evidence fields
+  scope_type: string | null;
+  scope_text: string | null;
+  trigger_spans: string[] | null;
+  evidence_heading_path: string | null;
 }
 
 export interface CaseTheme {

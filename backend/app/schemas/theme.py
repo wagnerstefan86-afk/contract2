@@ -18,6 +18,11 @@ class ThemeEvidenceResponse(BaseModel):
     kategorie: str | None = None
     risikostufe: str | None = None
     textstelle: str | None = None
+    # Paragraph-level evidence (nullable for legacy)
+    scope_type: str | None = None
+    scope_text: str | None = None
+    trigger_spans: list | None = None
+    evidence_heading_path: str | None = None
 
     model_config = {"from_attributes": True}
 

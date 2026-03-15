@@ -82,6 +82,10 @@ async def finale_themen_fuer_vertrag(
                             textstelle=fs.textstelle,
                             pruef_status=fs.pruef_status,
                             ist_primaer=(fs_id_str == prim_id),
+                            scope_type=getattr(fs, "scope_type", None),
+                            scope_text=getattr(fs, "scope_text", None),
+                            trigger_spans=getattr(fs, "trigger_spans", None),
+                            evidence_heading_path=getattr(fs, "evidence_heading_path", None),
                         ))
 
                 # If no fundstellen matched (edge case), include all but cap at 3
@@ -95,6 +99,10 @@ async def finale_themen_fuer_vertrag(
                             textstelle=fs.textstelle,
                             pruef_status=fs.pruef_status,
                             ist_primaer=(len(fundstellen_out) == 0),
+                            scope_type=getattr(fs, "scope_type", None),
+                            scope_text=getattr(fs, "scope_text", None),
+                            trigger_spans=getattr(fs, "trigger_spans", None),
+                            evidence_heading_path=getattr(fs, "evidence_heading_path", None),
                         ))
 
                 # Sort: primary first

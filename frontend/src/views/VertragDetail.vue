@@ -131,15 +131,30 @@
               <tr><th></th><th>Fundstelle</th><th>Risiko</th><th>Status</th></tr>
             </thead>
             <tbody>
-              <tr v-for="f in thema.fundstellen" :key="f.id" :style="{ background: f.ist_primaer ? '#eff6ff' : 'white' }">
-                <td style="width: 30px; text-align: center;">
-                  <span v-if="f.ist_primaer" style="color: #2563eb; font-weight: bold; font-size: 0.75rem;" title="Primärevidenz">P</span>
-                  <span v-else style="color: #6b7280; font-size: 0.75rem;" title="Sekundärevidenz">S</span>
-                </td>
-                <td><router-link :to="`/pruefung/${f.id}`">{{ f.kurzbeschreibung }}</router-link></td>
-                <td><StatusBadge :status="f.risikostufe" /></td>
-                <td><StatusBadge :status="f.pruef_status" /></td>
-              </tr>
+              <template v-for="f in thema.fundstellen" :key="f.id">
+                <tr :style="{ background: f.ist_primaer ? '#eff6ff' : 'white' }">
+                  <td style="width: 30px; text-align: center;">
+                    <span v-if="f.ist_primaer" style="color: #2563eb; font-weight: bold; font-size: 0.75rem;" title="Primärevidenz">P</span>
+                    <span v-else style="color: #6b7280; font-size: 0.75rem;" title="Sekundärevidenz">S</span>
+                  </td>
+                  <td>
+                    <router-link :to="`/pruefung/${f.id}`">{{ f.kurzbeschreibung }}</router-link>
+                    <span v-if="f.evidence_heading_path" style="display: block; font-size: 0.75rem; color: #9ca3af; margin-top: 0.15rem;">{{ f.evidence_heading_path }}</span>
+                  </td>
+                  <td><StatusBadge :status="f.risikostufe" /></td>
+                  <td><StatusBadge :status="f.pruef_status" /></td>
+                </tr>
+                <!-- Scope text preview row -->
+                <tr v-if="f.scope_text && offeneGruppen.has(thema.id)" :style="{ background: f.ist_primaer ? '#f0f7ff' : '#fafafa' }">
+                  <td></td>
+                  <td colspan="3" style="padding: 0.4rem 0.75rem; font-size: 0.8rem; color: #4b5563; border-top: none;">
+                    <div style="white-space: pre-wrap; line-height: 1.4; max-height: 100px; overflow: hidden;">{{ f.scope_text.substring(0, 400) }}{{ f.scope_text.length > 400 ? '...' : '' }}</div>
+                    <div v-if="f.trigger_spans && f.trigger_spans.length" style="margin-top: 0.3rem; font-size: 0.75rem; color: #92400e;">
+                      Relevante Passagen: {{ f.trigger_spans.join(' | ') }}
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
 

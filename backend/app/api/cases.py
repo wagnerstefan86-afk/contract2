@@ -305,6 +305,10 @@ async def list_themes(
                 kategorie=finding.kategorie if finding else None,
                 risikostufe=finding.risikostufe if finding else None,
                 textstelle=finding.textstelle if finding else None,
+                scope_type=finding.scope_type if finding else None,
+                scope_text=finding.scope_text if finding else None,
+                trigger_spans=finding.trigger_spans if finding else None,
+                evidence_heading_path=finding.evidence_heading_path if finding else None,
             ))
 
         theme_responses.append(ThemeResponse(

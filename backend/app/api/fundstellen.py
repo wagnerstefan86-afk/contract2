@@ -33,6 +33,11 @@ def _fundstelle_to_dict(f: Fundstelle) -> dict:
         "erstellt_am": f.erstellt_am.isoformat() if f.erstellt_am else None,
         "detail": f.detail if hasattr(f, 'detail') else None,
         "zusammenfuehrung": f.zusammenfuehrung,
+        # Paragraph-level evidence
+        "scope_type": getattr(f, "scope_type", None),
+        "scope_text": getattr(f, "scope_text", None),
+        "trigger_spans": getattr(f, "trigger_spans", None),
+        "evidence_heading_path": getattr(f, "evidence_heading_path", None),
     }
 
 

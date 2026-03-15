@@ -90,6 +90,13 @@ async def _ensure_schema():
         "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS suppression_reason TEXT",
         "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS policy_rule_id UUID",
         "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS normalized_risk_core VARCHAR(300)",
+        # -- fundstellen: paragraph-level evidence --
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS scope_type VARCHAR(50)",
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS scope_text TEXT",
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS trigger_spans JSONB",
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS evidence_heading_path TEXT",
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS evidence_page_from INTEGER",
+        "ALTER TABLE fundstellen ADD COLUMN IF NOT EXISTS evidence_page_to INTEGER",
         # -- risikothemen: final editorial pass --
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS final_selected BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS final_verwerfungsgrund TEXT",

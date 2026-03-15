@@ -21,6 +21,13 @@ class FundstelleResponse(BaseModel):
     erstellt_am: datetime
     detail: dict | None = None
     zusammenfuehrung: dict | None = None
+    # Paragraph-level evidence fields (nullable for legacy findings)
+    scope_type: str | None = None
+    scope_text: str | None = None
+    trigger_spans: list | None = None
+    evidence_heading_path: str | None = None
+    evidence_page_from: int | None = None
+    evidence_page_to: int | None = None
 
     model_config = {"from_attributes": True}
 

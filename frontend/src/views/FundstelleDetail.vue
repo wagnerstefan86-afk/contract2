@@ -11,7 +11,10 @@
         <span v-if="d && d.seite" style="color: #9ca3af; font-size: 0.8rem;">
           | Seite {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}
         </span>
-        <span v-if="d && d.ueberschrift" style="color: #9ca3af; font-size: 0.8rem;">
+        <span v-if="f.evidence_heading_path" style="color: #9ca3af; font-size: 0.8rem;">
+          | {{ f.evidence_heading_path.substring(0, 60) }}{{ f.evidence_heading_path.length > 60 ? '...' : '' }}
+        </span>
+        <span v-else-if="d && d.ueberschrift" style="color: #9ca3af; font-size: 0.8rem;">
           | {{ d.ueberschrift.substring(0, 60) }}{{ d.ueberschrift.length > 60 ? '...' : '' }}
         </span>
       </div>
@@ -83,23 +86,46 @@
 
     <!-- Tab: Textstelle & Kontext -->
     <div v-if="activeTab === 'textstelle'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px;">
+      <!-- Paragraph / clause context (primary evidence) -->
+      <div v-if="f.scope_text" style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #2563eb;">
+        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #1e40af;">
+          {{ f.scope_type === 'clause_block' ? 'Klauselblock-Kontext' : 'Absatz-Kontext' }}
+          <span v-if="f.evidence_heading_path" style="font-weight: normal; color: #6b7280; font-size: 0.8rem; margin-left: 0.5rem;">{{ f.evidence_heading_path }}</span>
+        </h3>
+        <div style="white-space: pre-wrap; line-height: 1.6; font-size: 0.95rem;" v-html="highlightedScopeText"></div>
+      </div>
+
+      <!-- Trigger spans listed separately -->
+      <div v-if="f.trigger_spans && f.trigger_spans.length > 0" style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px;">
+        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #92400e;">Relevante Passagen</h3>
+        <ul style="margin: 0; padding-left: 1.2rem;">
+          <li v-for="(span, i) in f.trigger_spans" :key="i" style="margin-bottom: 0.4rem; line-height: 1.5; font-size: 0.9rem;">
+            {{ span }}
+          </li>
+        </ul>
+      </div>
+
+      <!-- Fallback: legacy textstelle if no scope_text -->
+      <div v-if="!f.scope_text" style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px;">
         <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #92400e;">Betroffene Textstelle</h3>
         <div style="white-space: pre-wrap; line-height: 1.6; font-size: 0.95rem;">{{ f.textstelle }}</div>
       </div>
 
-      <div v-if="d && d.kontext" style="background: white; padding: 1rem; border-radius: 6px;">
+      <!-- Legacy context from detail enrichment -->
+      <div v-if="d && d.kontext && !f.scope_text" style="background: white; padding: 1rem; border-radius: 6px;">
         <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Umgebender Kontext</h3>
         <div style="white-space: pre-wrap; line-height: 1.5; font-size: 0.9rem; color: #374151; max-height: 400px; overflow-y: auto;" v-html="highlightedContext"></div>
       </div>
 
-      <div v-if="d" style="background: #f9fafb; padding: 0.75rem 1rem; border-radius: 6px;">
+      <div style="background: #f9fafb; padding: 0.75rem 1rem; border-radius: 6px;">
         <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #6b7280;">Referenzen</h3>
         <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.85rem;">
-          <div v-if="d.seite"><strong>Seite:</strong> {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</div>
-          <div v-if="d.ueberschrift"><strong>Klausel:</strong> {{ d.ueberschrift }}</div>
-          <div v-if="d.absatz_referenzen && d.absatz_referenzen.length"><strong>Absätze:</strong> {{ d.absatz_referenzen.join(', ') }}</div>
-          <div v-if="d.segment_ids && d.segment_ids.length"><strong>Segmente:</strong> {{ d.segment_ids.join(', ') }}</div>
+          <div v-if="f.evidence_page_from"><strong>Seite:</strong> {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</div>
+          <div v-else-if="d && d.seite"><strong>Seite:</strong> {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</div>
+          <div v-if="f.evidence_heading_path"><strong>Klausel:</strong> {{ f.evidence_heading_path }}</div>
+          <div v-else-if="d && d.ueberschrift"><strong>Klausel:</strong> {{ d.ueberschrift }}</div>
+          <div v-if="d && d.absatz_referenzen && d.absatz_referenzen.length"><strong>Absätze:</strong> {{ d.absatz_referenzen.join(', ') }}</div>
+          <div v-if="d && d.segment_ids && d.segment_ids.length"><strong>Segmente:</strong> {{ d.segment_ids.join(', ') }}</div>
         </div>
       </div>
     </div>
@@ -247,6 +273,50 @@ const tabs = [
 ];
 
 const d = computed<FundstelleDetail | null>(() => f.value?.detail ?? null);
+
+const highlightedScopeText = computed(() => {
+  if (!f.value?.scope_text) return "";
+  const scopeText = f.value.scope_text;
+  const spans = f.value.trigger_spans;
+  if (!spans || spans.length === 0) return escapeHtml(scopeText);
+
+  // Highlight each trigger span within scope_text
+  let result = scopeText;
+  const markers: Array<{ start: number; end: number }> = [];
+  for (const span of spans) {
+    let searchFrom = 0;
+    let idx = result.indexOf(span, searchFrom);
+    while (idx >= 0) {
+      markers.push({ start: idx, end: idx + span.length });
+      searchFrom = idx + span.length;
+      idx = result.indexOf(span, searchFrom);
+    }
+  }
+  if (markers.length === 0) return escapeHtml(scopeText);
+
+  // Sort by start position, merge overlapping
+  markers.sort((a, b) => a.start - b.start);
+  const merged: Array<{ start: number; end: number }> = [markers[0]];
+  for (let i = 1; i < markers.length; i++) {
+    const last = merged[merged.length - 1];
+    if (markers[i].start <= last.end) {
+      last.end = Math.max(last.end, markers[i].end);
+    } else {
+      merged.push(markers[i]);
+    }
+  }
+
+  // Build HTML with highlights
+  let html = "";
+  let pos = 0;
+  for (const m of merged) {
+    html += escapeHtml(result.substring(pos, m.start));
+    html += `<mark style="background: #fef08a; padding: 0 2px;">${escapeHtml(result.substring(m.start, m.end))}</mark>`;
+    pos = m.end;
+  }
+  html += escapeHtml(result.substring(pos));
+  return html;
+});
 
 const highlightedContext = computed(() => {
   if (!d.value?.kontext || !f.value?.textstelle) return d.value?.kontext || "";

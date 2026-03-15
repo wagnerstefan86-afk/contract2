@@ -351,24 +351,41 @@ async def _screen_single_section(section: DocumentSection, config: LLMConfig) ->
 
 EXTRACTION_SYSTEM_PROMPT = """Du bist ein Vertragsanalyse-Experte. Analysiere den folgenden Vertragsabschnitt und extrahiere ALLE risikorelevanten Fundstellen.
 
+WICHTIG — Evidenz-Granularität:
+- Bewerte Risiken IMMER im Kontext des vollständigen Absatzes oder Klauselblocks.
+- Produziere KEINE Fundstellen basierend auf isolierten Satzfragmenten oder einzelnen Phrasen.
+- Gib den vollständigen Absatz/Klauselblock als "scope_text" zurück.
+- Markiere die konkreten Auslöser-Passagen innerhalb des Absatzes als "trigger_spans".
+
 Antworte AUSSCHLIESSLICH mit einem JSON-Array (kein Markdown, keine Erklärung):
 [
   {
-    "textstelle": "Exakter Wortlaut aus dem Text (max 300 Zeichen)",
     "kurzbeschreibung": "Kurze Beschreibung des Risikos (max 150 Zeichen)",
     "kategorie": "KATEGORIE",
     "risikostufe": "Hoch" | "Mittel" | "Niedrig" | "Hinweis",
     "erklaerung": "Warum ist das ein Risiko? (2-3 Sätze)",
     "empfehlung": "Handlungsempfehlung (1-2 Sätze)",
+    "scope_type": "paragraph" | "clause_block",
+    "scope_text": "Vollständiger Absatz- oder Klauselblock-Text, der den Evidenz-Kontext bildet",
+    "trigger_spans": ["Konkrete Passage 1 innerhalb des scope_text", "Konkrete Passage 2"],
     "ist_positiv": false
   }
 ]
+
+Regeln für scope_text und trigger_spans:
+- scope_text enthält den VOLLSTÄNDIGEN Absatz oder Klauselblock aus dem Originaltext
+- trigger_spans enthält 1-3 kürzere Textpassagen AUS dem scope_text, die das Risiko konkret auslösen
+- trigger_spans dürfen NIEMALS den scope_text ersetzen — sie sind Hervorhebungen innerhalb des Kontexts
+- scope_type ist "paragraph" wenn es ein einzelner Absatz ist, "clause_block" wenn mehrere zusammengehörende Unterabsätze
 
 Wenn der Abschnitt eine Zertifizierung, einen Standard oder eine positive Zusicherung enthält, setze "ist_positiv": true.
 
 Kategorien: SECURITY_GOVERNANCE, CERTIFICATION_ASSURANCE, AUDIT_RIGHTS, SUBPROCESSING, AVAILABILITY_SLA, INCIDENT_MANAGEMENT, CHANGE_MANAGEMENT, EXIT_PORTABILITY, BACKUP_RECOVERY, BCM_ITSCM, LIABILITY, PERFORMANCE_REPORTING, DATA_PROTECTION, OTHER
 
 Wenn KEINE Fundstellen vorhanden sind, antworte mit einem leeren Array: []"""
+
+# Minimum chars for scope_text to be considered valid paragraph-level evidence
+MIN_SCOPE_TEXT_LENGTH = 80
 
 
 async def extract_findings(
@@ -457,13 +474,33 @@ async def extract_findings(
                         except Exception as e:
                             logger.warning(f"Policy scan_finding Fehler: {e}")
 
+                    # --- Paragraph-level evidence fields ---
+                    scope_text = finding_data.get("scope_text") or ""
+                    scope_type = finding_data.get("scope_type") or ""
+                    raw_trigger_spans = finding_data.get("trigger_spans")
+                    trigger_spans = (
+                        [str(s) for s in raw_trigger_spans if s]
+                        if isinstance(raw_trigger_spans, list)
+                        else []
+                    )
+
+                    # Quality guardrail: if scope_text is too short, fall
+                    # back to the full section text as the evidence context
+                    if len(scope_text) < MIN_SCOPE_TEXT_LENGTH and section.raw_text:
+                        scope_text = section.raw_text
+                        scope_type = "paragraph"
+
+                    # Backward compat: populate legacy textstelle with
+                    # scope_text (paragraph context) so old pages still work
+                    legacy_textstelle = scope_text[:2000] if scope_text else finding_data.get("textstelle", "")[:500]
+
                     fundstelle = Fundstelle(
                         analyse_id=analyse_id,
                         vertrag_id=vertrag_id,
                         analysis_case_id=case_id,
                         case_document_id=section.case_document_id,
                         document_section_id=section.id,
-                        textstelle=finding_data.get("textstelle", "")[:500],
+                        textstelle=legacy_textstelle,
                         kurzbeschreibung=finding_data.get("kurzbeschreibung", "Unbekannt"),
                         kategorie=finding_data.get("kategorie", "OTHER"),
                         risikostufe=finding_data.get("risikostufe", "Hinweis"),
@@ -474,6 +511,13 @@ async def extract_findings(
                         is_suppressed=is_suppressed,
                         suppression_reason=suppression_reason,
                         policy_rule_id=policy_rule_id,
+                        # Paragraph-level evidence
+                        scope_type=scope_type if scope_type in ("paragraph", "clause_block") else None,
+                        scope_text=scope_text or None,
+                        trigger_spans=trigger_spans or None,
+                        evidence_heading_path=section.heading_path,
+                        evidence_page_from=section.page_from,
+                        evidence_page_to=section.page_to,
                     )
                     db.add(fundstelle)
                     metrics["total_findings"] += 1

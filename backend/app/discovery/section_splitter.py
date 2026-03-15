@@ -1,6 +1,9 @@
 """Section Splitter — splits extracted text into structured sections/chunks.
 
-Target chunk size: 1500-3000 characters.
+Prefers paragraph / clause-block boundaries so that each section represents
+one contractual paragraph or a small group of closely related short paragraphs
+within the same numbered clause.
+
 Preserves heading paths for context.
 Produces normalized text + hash for deduplication.
 """
@@ -38,12 +41,20 @@ HEADING_PATTERN = re.compile(
     re.MULTILINE,
 )
 
+# Pattern for numbered sub-items that start a new contractual paragraph
+# e.g. "(1)", "(a)", "(i)", "(aa)"
+NUMBERED_ITEM_PATTERN = re.compile(
+    r"^\s*\((?:\d+|[a-z]+|[ivxlc]+)\)\s",
+    re.MULTILINE,
+)
+
 TABLE_INDICATORS = ["---|", "| ", "\t\t", "  |  "]
 
-# Target chunk sizes
-MIN_CHUNK = 500
+# Chunk size thresholds — lowered MIN to let individual paragraphs stand alone
+MIN_CHUNK = 120          # individual paragraphs can be short
+MERGE_THRESHOLD = 300    # only merge paragraphs below this if they share a clause
 TARGET_CHUNK = 2000
-MAX_CHUNK = 3500
+MAX_CHUNK = 4000
 
 
 def split_into_sections(
@@ -54,9 +65,11 @@ def split_into_sections(
 
     Strategy:
     1. Split on headings to get semantic blocks
-    2. Merge small blocks, split oversized blocks
-    3. Classify section types
-    4. Compute page references
+    2. Within each heading block, split on paragraph boundaries
+    3. Merge only very short paragraphs within the same clause
+    4. Split oversized paragraphs if technically unavoidable
+    5. Classify section types
+    6. Compute page references
     """
     if not text or len(text.strip()) < 10:
         return []
@@ -64,14 +77,14 @@ def split_into_sections(
     # Step 1: Split on headings
     raw_blocks = _split_on_headings(text)
 
-    # Step 2: Merge small blocks and split oversized ones
-    sized_blocks = _resize_blocks(raw_blocks)
+    # Step 2: Split heading blocks into paragraphs, then merge/resize
+    paragraph_blocks = _split_into_paragraphs(raw_blocks)
 
     # Step 3: Build section objects
     sections: list[Section] = []
     char_offset = 0
 
-    for idx, (heading, block_text) in enumerate(sized_blocks):
+    for idx, (heading, block_text) in enumerate(paragraph_blocks):
         normalized = _normalize(block_text)
         section_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
         section_type = _classify_section(block_text, heading)
@@ -132,48 +145,93 @@ def _split_on_headings(text: str) -> list[tuple[str | None, str]]:
     return blocks if blocks else [(None, text)]
 
 
-def _resize_blocks(blocks: list[tuple[str | None, str]]) -> list[tuple[str | None, str]]:
-    """Merge small blocks and split oversized ones to hit target chunk size."""
+def _split_into_paragraphs(
+    blocks: list[tuple[str | None, str]],
+) -> list[tuple[str | None, str]]:
+    """Split each heading block into paragraph-level chunks.
+
+    Within a heading block, paragraphs are separated by blank lines.
+    Short paragraphs within the same clause are merged to avoid
+    excessively tiny sections.  Oversized paragraphs are split only
+    if they exceed MAX_CHUNK.
+    """
     result: list[tuple[str | None, str]] = []
 
-    buffer_heading: str | None = None
-    buffer_text = ""
+    for heading, block_text in blocks:
+        # Split on blank lines to get raw paragraphs
+        raw_paras = re.split(r"\n\s*\n", block_text)
+        raw_paras = [p.strip() for p in raw_paras if p.strip()]
 
-    for heading, text in blocks:
-        combined = (buffer_text + "\n\n" + text).strip() if buffer_text else text
-
-        if len(combined) < MIN_CHUNK:
-            # Too small — buffer it
-            buffer_text = combined
-            if buffer_heading is None:
-                buffer_heading = heading
+        if not raw_paras:
             continue
 
-        if len(combined) <= MAX_CHUNK:
-            # Good size — emit
-            result.append((buffer_heading or heading, combined))
-            buffer_text = ""
-            buffer_heading = None
+        if len(raw_paras) == 1:
+            # Single paragraph — keep as-is or split if oversized
+            para = raw_paras[0]
+            if len(para) > MAX_CHUNK:
+                for chunk in _split_oversized(para, TARGET_CHUNK, MAX_CHUNK):
+                    result.append((heading, chunk))
+            else:
+                result.append((heading, para))
             continue
 
-        # Oversized — flush buffer first, then split current block
-        if buffer_text and len(buffer_text) >= MIN_CHUNK:
-            result.append((buffer_heading, buffer_text))
-            buffer_text = ""
-            buffer_heading = None
+        # Multiple paragraphs — merge very short ones within same clause
+        merged = _merge_short_paragraphs(raw_paras, heading)
+        for para_text in merged:
+            if len(para_text) > MAX_CHUNK:
+                for chunk in _split_oversized(para_text, TARGET_CHUNK, MAX_CHUNK):
+                    result.append((heading, chunk))
+            else:
+                result.append((heading, para_text))
 
-        # Split the oversized text
-        chunks = _split_oversized(text, TARGET_CHUNK, MAX_CHUNK)
-        for i, chunk in enumerate(chunks):
-            chunk_heading = heading if i == 0 else f"{heading} (Fortsetzung)" if heading else None
-            result.append((chunk_heading, chunk))
+    # Final pass: merge any tiny trailing sections (<MIN_CHUNK) with predecessor
+    if len(result) > 1:
+        compacted: list[tuple[str | None, str]] = [result[0]]
+        for heading, text in result[1:]:
+            prev_heading, prev_text = compacted[-1]
+            if len(text) < MIN_CHUNK and len(prev_text) + len(text) + 2 <= MAX_CHUNK:
+                compacted[-1] = (prev_heading, prev_text + "\n\n" + text)
+            else:
+                compacted.append((heading, text))
+        result = compacted
 
-        buffer_text = ""
-        buffer_heading = None
+    return result
 
-    # Flush remaining buffer
-    if buffer_text.strip():
-        result.append((buffer_heading, buffer_text.strip()))
+
+def _merge_short_paragraphs(
+    paragraphs: list[str],
+    heading: str | None,
+) -> list[str]:
+    """Merge very short paragraphs that belong to the same clause block.
+
+    Only merges paragraphs shorter than MERGE_THRESHOLD if:
+    - they don't start with a numbered item pattern (which indicates a new clause point)
+    - the combined size stays under TARGET_CHUNK
+    """
+    result: list[str] = []
+    buffer = ""
+
+    for para in paragraphs:
+        is_new_item = bool(NUMBERED_ITEM_PATTERN.match(para))
+
+        if not buffer:
+            buffer = para
+            continue
+
+        # If the buffered text is short AND the new para doesn't start a new
+        # numbered item AND the combined size is reasonable, merge them.
+        if (
+            len(buffer) < MERGE_THRESHOLD
+            and not is_new_item
+            and len(buffer) + len(para) + 2 <= TARGET_CHUNK
+        ):
+            buffer = buffer + "\n\n" + para
+        else:
+            result.append(buffer)
+            buffer = para
+
+    if buffer:
+        result.append(buffer)
 
     return result
 
@@ -206,8 +264,6 @@ def _split_oversized(text: str, target: int, max_size: int) -> list[str]:
 
 def _classify_section(text: str, heading: str | None) -> str:
     """Classify section type based on content heuristics."""
-    text_lower = text.lower()
-
     if heading and len(text.strip().split("\n")) <= 2 and len(text) < 200:
         return "HEADING"
 

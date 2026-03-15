@@ -71,6 +71,19 @@ class Fundstelle(Base):
     )
     normalized_risk_core: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
+    # --- Paragraph-level evidence fields (Step 1: finding granularity) ---
+    # "paragraph" or "clause_block" — what scope the finding covers
+    scope_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Full paragraph / clause block text forming the main evidence context
+    scope_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Narrower trigger phrases within scope_text that specifically triggered the finding
+    trigger_spans: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Clause/section heading path from the document structure
+    evidence_heading_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Page references for the evidence scope
+    evidence_page_from: Mapped[int | None] = mapped_column(nullable=True)
+    evidence_page_to: Mapped[int | None] = mapped_column(nullable=True)
+
     # Relationships
     analyse = relationship("Analyse", back_populates="fundstellen")
     vertrag = relationship("Vertrag", back_populates="fundstellen")
