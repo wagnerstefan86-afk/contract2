@@ -349,43 +349,110 @@ async def _screen_single_section(section: DocumentSection, config: LLMConfig) ->
 # Step 7 — Extraction
 # ---------------------------------------------------------------------------
 
-EXTRACTION_SYSTEM_PROMPT = """Du bist ein Vertragsanalyse-Experte. Analysiere den folgenden Vertragsabschnitt und extrahiere ALLE risikorelevanten Fundstellen.
+EXTRACTION_SYSTEM_PROMPT = """You are a contract risk extraction system for IT service provider contract reviews.
+Your task is NOT to list every potentially problematic sentence.
+Your task is to extract only MATERIAL contractual risks that would realistically be raised during a professional contract review.
 
-WICHTIG — Evidenz-Granularität:
-- Bewerte Risiken IMMER im Kontext des vollständigen Absatzes oder Klauselblocks.
-- Produziere KEINE Fundstellen basierend auf isolierten Satzfragmenten oder einzelnen Phrasen.
-- Gib den vollständigen Absatz/Klauselblock als "scope_text" zurück.
-- Markiere die konkreten Auslöser-Passagen innerhalb des Absatzes als "trigger_spans".
+Important principle:
+Most paragraphs do NOT contain a standalone contractual risk.
+Only produce a finding when the paragraph contains a clear contractual risk that would require clarification, negotiation, or mitigation.
 
-Antworte AUSSCHLIESSLICH mit einem JSON-Array (kein Markdown, keine Erklärung):
+--------------------------------
+RISK DETECTION RULES
+--------------------------------
+Create a finding ONLY if at least one of the following conditions is true:
+1. The contract creates a one-sided obligation or right
+   (e.g. unilateral instruction rights, unilateral changes, unilateral termination).
+2. Liability or responsibility is unclear, unlimited, or transferred broadly.
+3. The scope of services is vague, open-ended, or allows uncontrolled expansion.
+4. Compliance, security, regulatory, or reporting obligations are imposed without clear limits.
+5. Audit or control rights create operational or legal risk.
+6. Subcontracting or delegation creates unclear responsibility or liability.
+7. An obligation exists without defined limits, criteria, or boundaries.
+
+If none of these conditions apply, the paragraph has NO_FINDING.
+
+--------------------------------
+ANTI-NOISE RULES
+--------------------------------
+DO NOT create a finding when:
+- The text only describes normal contractual structure.
+- The clause is neutral or balanced.
+- The clause merely references compliance or standards without imposing unclear obligations.
+- The risk only exists when taken out of context.
+
+--------------------------------
+CONTEXT RULE
+--------------------------------
+A finding must always be based on the full paragraph or clause context.
+Never generate findings based on isolated sentences or fragments.
+
+--------------------------------
+DEDUPLICATION RULE
+--------------------------------
+Each paragraph may produce at most one finding.
+If multiple potential risks appear in the paragraph,
+choose the single most relevant contractual risk.
+
+--------------------------------
+POSITIVE CONTROLS
+--------------------------------
+If the paragraph contains a certification, standard, or positive assurance
+(e.g. ISO 27001, SOC 2, explicit security commitment), return it as a
+positive_control instead of a risk finding.
+
+--------------------------------
+OUTPUT FORMAT
+--------------------------------
+Return ONLY a JSON array (no markdown, no explanation).
+Each element is either a risk finding or a positive control:
+
 [
   {
-    "kurzbeschreibung": "Kurze Beschreibung des Risikos (max 150 Zeichen)",
-    "kategorie": "KATEGORIE",
-    "risikostufe": "Hoch" | "Mittel" | "Niedrig" | "Hinweis",
-    "erklaerung": "Warum ist das ein Risiko? (2-3 Sätze)",
-    "empfehlung": "Handlungsempfehlung (1-2 Sätze)",
-    "scope_type": "paragraph" | "clause_block",
-    "scope_text": "Vollständiger Absatz- oder Klauselblock-Text, der den Evidenz-Kontext bildet",
-    "trigger_spans": ["Konkrete Passage 1 innerhalb des scope_text", "Konkrete Passage 2"],
+    "scope_type": "paragraph",
+    "scope_text": "full paragraph text from the document",
+    "trigger_spans": ["short trigger phrase 1", "optional trigger phrase 2"],
+    "category": "CATEGORY",
+    "severity": "low|medium|high|critical",
+    "description": "short explanation of the contractual risk (2-3 sentences)",
     "ist_positiv": false
+  },
+  {
+    "scope_text": "paragraph with positive assurance",
+    "description": "ISO 27001 certification confirmed",
+    "ist_positiv": true
   }
 ]
 
-Regeln für scope_text und trigger_spans:
-- scope_text enthält den VOLLSTÄNDIGEN Absatz oder Klauselblock aus dem Originaltext
-- trigger_spans enthält 1-3 kürzere Textpassagen AUS dem scope_text, die das Risiko konkret auslösen
-- trigger_spans dürfen NIEMALS den scope_text ersetzen — sie sind Hervorhebungen innerhalb des Kontexts
-- scope_type ist "paragraph" wenn es ein einzelner Absatz ist, "clause_block" wenn mehrere zusammengehörende Unterabsätze
+If NO paragraphs contain material risks or positive controls, return: []
 
-Wenn der Abschnitt eine Zertifizierung, einen Standard oder eine positive Zusicherung enthält, setze "ist_positiv": true.
+Categories: SECURITY_GOVERNANCE, CERTIFICATION_ASSURANCE, AUDIT_RIGHTS, SUBPROCESSING, AVAILABILITY_SLA, INCIDENT_MANAGEMENT, CHANGE_MANAGEMENT, EXIT_PORTABILITY, BACKUP_RECOVERY, BCM_ITSCM, LIABILITY, PERFORMANCE_REPORTING, DATA_PROTECTION, OTHER
 
-Kategorien: SECURITY_GOVERNANCE, CERTIFICATION_ASSURANCE, AUDIT_RIGHTS, SUBPROCESSING, AVAILABILITY_SLA, INCIDENT_MANAGEMENT, CHANGE_MANAGEMENT, EXIT_PORTABILITY, BACKUP_RECOVERY, BCM_ITSCM, LIABILITY, PERFORMANCE_REPORTING, DATA_PROTECTION, OTHER
-
-Wenn KEINE Fundstellen vorhanden sind, antworte mit einem leeren Array: []"""
+--------------------------------
+QUALITY REQUIREMENTS
+--------------------------------
+- Only extract risks that a legal or security reviewer would actually discuss.
+- Prefer fewer, higher-quality findings.
+- Avoid creating multiple findings for variations of the same clause.
+- Never invent risks that are not clearly supported by the paragraph.
+- A good extraction result contains few but meaningful findings, not many weak signals."""
 
 # Minimum chars for scope_text to be considered valid paragraph-level evidence
 MIN_SCOPE_TEXT_LENGTH = 80
+
+# Map LLM severity labels to internal Risikostufe values
+_SEVERITY_MAP = {
+    "critical": "Kritisch",
+    "high": "Hoch",
+    "medium": "Mittel",
+    "low": "Niedrig",
+    # Pass-through for legacy or German labels
+    "kritisch": "Kritisch",
+    "hoch": "Hoch",
+    "mittel": "Mittel",
+    "niedrig": "Niedrig",
+    "hinweis": "Hinweis",
+}
 
 
 async def extract_findings(
@@ -437,6 +504,10 @@ async def extract_findings(
                 section_findings = 0
 
                 for finding_data in res:
+                    # Skip NO_FINDING entries
+                    if finding_data.get("result") == "NO_FINDING":
+                        continue
+
                     ist_positiv = finding_data.get("ist_positiv", False)
 
                     if ist_positiv:
@@ -445,13 +516,24 @@ async def extract_findings(
                             case_document_id=section.case_document_id,
                             document_section_id=section.id,
                             control_type=ControlType.STANDARD_CONTROL.value,
-                            control_value=finding_data.get("kurzbeschreibung", ""),
-                            source_text=finding_data.get("textstelle", "")[:500],
+                            control_value=finding_data.get("description", finding_data.get("kurzbeschreibung", ""))[:500],
+                            source_text=(finding_data.get("scope_text") or finding_data.get("textstelle") or "")[:500],
                             status=ControlStatus.NEEDS_REVIEW.value,
                         )
                         db.add(pc)
                         metrics["total_positive_controls"] += 1
                         continue
+
+                    # --- Map field names (new prompt → model) ---
+                    # "description" → kurzbeschreibung + erklaerung
+                    description = finding_data.get("description") or ""
+                    kurzbeschreibung = finding_data.get("kurzbeschreibung") or description[:150] or "Unbekannt"
+                    erklaerung = finding_data.get("erklaerung") or description or None
+                    # "category" → kategorie
+                    kategorie = finding_data.get("category") or finding_data.get("kategorie") or "OTHER"
+                    # "severity" → risikostufe (with mapping)
+                    raw_severity = (finding_data.get("severity") or finding_data.get("risikostufe") or "medium").lower()
+                    risikostufe = _SEVERITY_MAP.get(raw_severity, "Mittel")
 
                     # Policy post-filtering
                     is_suppressed = False
@@ -461,8 +543,8 @@ async def extract_findings(
                         try:
                             from app.discovery.policy_engine import scan_finding
                             matches = scan_finding(
-                                finding_data.get("kurzbeschreibung", ""),
-                                finding_data.get("kategorie", "OTHER"),
+                                kurzbeschreibung,
+                                kategorie,
                                 policy_rules,
                             )
                             for m in matches:
@@ -501,10 +583,10 @@ async def extract_findings(
                         case_document_id=section.case_document_id,
                         document_section_id=section.id,
                         textstelle=legacy_textstelle,
-                        kurzbeschreibung=finding_data.get("kurzbeschreibung", "Unbekannt"),
-                        kategorie=finding_data.get("kategorie", "OTHER"),
-                        risikostufe=finding_data.get("risikostufe", "Hinweis"),
-                        erklaerung=finding_data.get("erklaerung"),
+                        kurzbeschreibung=kurzbeschreibung,
+                        kategorie=kategorie,
+                        risikostufe=risikostufe,
+                        erklaerung=erklaerung,
                         empfehlung=finding_data.get("empfehlung"),
                         extraction_pass="case_step7",
                         pruef_status=PruefStatus.OFFEN.value,
