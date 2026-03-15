@@ -1,8 +1,8 @@
 """Pass 2: Perspektivische Vertiefung — domain-specific expert lenses.
 
 Runs multiple sub-passes, each with a specialized perspective that
-may catch issues the broad pass missed. Each sub-pass re-reads
-segments through a domain-expert lens.
+may catch material risks the broad pass missed. Uses the shared
+material-risk extraction prompt with domain-specific additions.
 """
 
 from __future__ import annotations
@@ -11,106 +11,75 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, FINDING_JSON_SCHEMA, QUALITAETS_REGELN
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# Each perspective: (name, system prompt addition)
+# Each perspective: (name, additional focus instructions)
 PERSPEKTIVEN = [
     (
         "Informationssicherheit",
-        """Du bist Experte für Informationssicherheit und prüfst Verträge aus Auftragnehmer-Sicht.
-Suche nach ALLEN Klauseln, die Folgendes betreffen — auch wenn sie nur indirekt oder am Rande relevant erscheinen:
-- Verschlüsselungsanforderungen, die schwer erfüllbar oder nicht genau spezifiziert sind
-- Zugriffskontrollen und Berechtigungsmanagement-Pflichten
-- Vorfallmeldepflichten (Incident Response) mit unrealistischen Fristen (z.B. unter 24h)
-- Anforderungen an Sicherheitszertifizierungen (ISO 27001, SOC2, C5 etc.)
-- Datenlöschpflichten und Nachweispflichten für Löschung
-- Penetrationstests oder Sicherheitsaudits, die der Auftragnehmer dulden muss
-- Anforderungen an Standort, Datenresidenz, Netzwerktrennung
-- Verpflichtungen zur Einhaltung von Sicherheitsstandards des Auftraggebers (die sich ändern können!)
-- "Stand der Technik"-Formulierungen bei Sicherheitsanforderungen
-- Pflicht zur Bereitstellung eines Incident-Response-Teams""",
+        """Additional focus — Information Security perspective:
+- Encryption requirements that are hard to fulfill or unspecified
+- Incident response obligations with unrealistic deadlines (< 24h)
+- Security certification requirements (ISO 27001, SOC2, C5)
+- Data deletion obligations and proof-of-deletion requirements
+- Penetration testing or security audits the contractor must tolerate
+- Data residency, network separation requirements
+- Obligations to comply with client security standards (that can change!)
+- "State of the art" formulations in security requirements""",
     ),
     (
         "BCM / Betrieb / Resilienz",
-        """Du bist Experte für Business Continuity, IT-Betrieb und Resilienz.
-Suche nach ALLEN Klauseln, die Folgendes betreffen — auch Klauseln, die nur indirekt Betriebsverpflichtungen schaffen:
-- SLA-Verpflichtungen mit hohen Verfügbarkeitsanforderungen (99.9%+ ist problematisch, 99.95%+ ist sehr problematisch)
-- Reaktionszeiten und Wiederherstellungszeiten (RTO/RPO), die unrealistisch sein könnten
-- BCM/DR-Planpflichten und regelmäßige Testpflichten
-- Notfallübungen, die der Auftragnehmer durchführen oder unterstützen muss
-- Strafen bei SLA-Verletzungen (Pönalen, Service Credits) — besonders wenn kumulierbar
-- Vertragsstrafen, die NICHT auf den Gesamtschaden angerechnet werden
-- Kapazitätszusicherungen und Skalierungspflichten
-- Pflichten bei Ausfall von Subdienstleistern
-- Verpflichtungen zu redundanten Systemen oder georedundanten Standorten
-- Wartungsfenster-Einschränkungen, die Betrieb erschweren
-- Prioritätseinstufungen, die einseitig vom Auftraggeber festgelegt werden""",
+        """Additional focus — Business Continuity & Operations perspective:
+- SLA obligations with high availability requirements (99.9%+ is problematic)
+- Unrealistic RTO/RPO targets
+- BCM/DR plan obligations and regular testing requirements
+- Cumulative penalties or service credits
+- Capacity guarantees and scaling obligations
+- Obligations when subcontractors fail
+- Geo-redundancy or redundant system requirements
+- Maintenance window restrictions
+- One-sided priority classifications by the client""",
     ),
     (
         "Compliance / Regulatorik",
-        """Du bist Experte für regulatorische Compliance und prüfst aus Auftragnehmer-Sicht.
-Suche nach ALLEN Klauseln, die Folgendes betreffen — besonders regulatorische Durchreichung ist häufig und gefährlich:
-- Regulatorische Durchreichung (regulatory pass-through): Pflichten, die eigentlich den Auftraggeber treffen, aber an den Auftragnehmer weitergereicht werden
-- DSGVO-Pflichten, die über das Standardmaß hinausgehen
-- Branchenspezifische Regularien (BAIT, VAIT, DORA, NIS2, KRITIS) — der Auftragnehmer ist oft kein reguliertes Institut!
-- Zertifizierungspflichten, die der Auftragnehmer erfüllen und aufrechterhalten muss
-- Pflicht zur Einhaltung von Weisungen, die sich ändern können (Blanko-Weisungsrecht)
-- Compliance-Nachweispflichten und Berichtspflichten
-- Pflicht zur Anpassung an sich ändernde Regulierung auf EIGENE KOSTEN
-- Pflicht zur Einhaltung von "sämtlichen für den Auftraggeber geltenden" Anforderungen — das ist eine Blanko-Pflicht
-- Verweis auf BaFin-Rundschreiben oder ähnliche regulatorische Dokumente, die sich ändern""",
+        """Additional focus — Regulatory Compliance perspective:
+- Regulatory pass-through: obligations that belong to the client but are imposed on the contractor
+- GDPR obligations exceeding standard scope
+- Industry-specific regulations (BAIT, VAIT, DORA, NIS2, KRITIS) — contractor is often NOT a regulated entity!
+- Blanket instruction rights that can change
+- Obligation to adapt to changing regulations at OWN COST
+- Blanket compliance obligations ("all requirements applicable to the client")
+- References to regulatory circulars that can change""",
     ),
     (
         "Audit / Reporting / Nachweise",
-        """Du bist Experte für Audit- und Nachweispflichten in IT-Verträgen.
-Suche nach ALLEN Klauseln, die Folgendes betreffen — Audit-Rechte werden oft unterschätzt:
-- Prüfrechte des Auftraggebers (vor Ort, remote, unangekündigt)
-- Prüfrechte von Dritten (Wirtschaftsprüfer, Regulatoren, BaFin)
-- Uneingeschränkte Zugangsrechte zu Unterlagen, Systemen und Räumlichkeiten
-- Berichtspflichten mit hoher Frequenz oder nicht spezifiziertem Umfang
-- Berichte deren Format, Umfang und Detailtiefe EINSEITIG vom Auftraggeber festgelegt werden
-- Nachweispflichten für Zertifizierungen, Schulungen, Prozesse
-- Pflicht zur Herausgabe von Dokumenten, Logdateien, Konfigurationen
-- KPI-Reporting und Messmethoden, die einseitig definiert werden
-- Mitwirkungspflichten bei Prüfungen Dritter auf EIGENE KOSTEN
-- Aufbewahrungspflichten für Dokumentation
-- Pflicht, Audit-Kosten selbst zu tragen""",
+        """Additional focus — Audit & Reporting perspective:
+- Client audit rights (on-site, remote, unannounced)
+- Third-party audit rights (auditors, regulators)
+- Unrestricted access rights to documents, systems, premises
+- Reporting obligations with high frequency or unspecified scope
+- Reports whose format and detail are unilaterally defined by the client
+- Obligation to bear audit costs
+- KPI reporting with one-sided measurement methods
+- Documentation retention obligations""",
     ),
     (
         "Haftung / Zusicherung / Überdehnung",
-        """Du bist Experte für Haftungsrecht in IT-Verträgen und prüfst aus Auftragnehmer-Sicht.
-Suche nach ALLEN Klauseln, die Folgendes betreffen — fehlende Haftungsbegrenzungen sind genauso problematisch wie explizite:
-- Haftungsobergrenzen, die FEHLEN oder unangemessen hoch sind
-- UNBESCHRÄNKTE Haftung (ist fast immer problematisch)
-- Ausschluss der Beschränkung auf leichte Fahrlässigkeit
-- Freistellungsverpflichtungen (Indemnification) zugunsten des Auftraggebers
-- Gewährleistungszusagen, die über den Standard hinausgehen
-- Schadensersatzregelungen mit unklarem Umfang
-- Vertragsstrafen / Pönalen, besonders wenn kumulierbar oder nicht anrechenbar
-- Zusicherungen, die schwer einhaltbar sind ("Mängelfreiheit", "Stand der Technik", "marktüblich")
-- Haftung für Dritte oder Subunternehmer wie für eigenes Verschulden
-- Versicherungspflichten mit hohen Deckungssummen (10 Mio.+)
-- Einseitige Haftungsausschlüsse zugunsten des Auftraggebers
-- IP-Übertragung bei Vertragsende oder automatisch bei Entstehung
-- Unwiderruflicher Verzicht auf Rechte""",
+        """Additional focus — Liability & Warranty perspective:
+- Missing or unreasonably high liability caps
+- Unlimited liability (almost always problematic)
+- Indemnification obligations favoring the client
+- Warranties exceeding standard scope
+- Cumulative or non-deductible penalties
+- Guarantees that are hard to keep ("defect-free", "state of the art")
+- Liability for third parties or subcontractors as own fault
+- Insurance requirements with high coverage amounts (10M+)
+- One-sided liability exclusions favoring the client
+- IP transfer at contract end or automatic upon creation""",
     ),
 ]
-
-
-BASE_SYSTEM = """Du bist ein erfahrener Vertragsjurist und IT-Sourcing-Spezialist mit Fokus auf Managed Services, Outsourcing, Cloud-Verträge und regulatorische Anforderungen.
-Du prüfst Verträge aus der Perspektive eines Auftragnehmers (IT-Dienstleister).
-
-WICHTIG: Du sollst NUR solche Punkte identifizieren, die für den Auftragnehmer ein rechtliches, wirtschaftliches oder operatives Risiko, ein einseitiges Machtgefälle oder eine regulatorische Haftungsübertragung darstellen.
-Ignoriere unkritische Standardpassagen und rein deklarative Formulierungen.
-
-{SPEZIALISIERUNG}
-
-{regeln}
-
-{schema}
-"""
 
 
 class PerspektivePass(DiscoveryPass):
@@ -124,19 +93,15 @@ class PerspektivePass(DiscoveryPass):
     ) -> list[RawFinding]:
         all_findings: list[RawFinding] = []
 
-        for perspektive_name, spezialisierung in PERSPEKTIVEN:
+        for perspektive_name, focus_instructions in PERSPEKTIVEN:
             logger.info(f"Perspektive-Pass: {perspektive_name}")
-            system = BASE_SYSTEM.format(
-                SPEZIALISIERUNG=spezialisierung,
-                regeln=QUALITAETS_REGELN,
-                schema=FINDING_JSON_SCHEMA,
-            )
+            system = MATERIAL_RISK_SYSTEM_PROMPT + f"\n\n{focus_instructions}"
 
             for seg in segments:
                 user_prompt = (
-                    f"Analysiere den folgenden Vertragsabschnitt aus der Perspektive "
-                    f"'{perspektive_name}'. Identifiziere nur tatsächlich verhandlungsrelevante "
-                    f"Risiken. Fasse ähnliche Risiken zusammen.\n\n"
+                    f"Analyze the following contract section from the '{perspektive_name}' perspective. "
+                    f"Extract only MATERIAL contractual risks. "
+                    f"Return NO_FINDING if no material risk exists.\n\n"
                     f"{seg.fenster_text}"
                 )
 
@@ -149,7 +114,8 @@ class PerspektivePass(DiscoveryPass):
                 )
 
                 pass_label = f"{self.name} ({perspektive_name})"
-                findings = self._parse_findings(items, pass_label, [seg.id])
+                findings = self._parse_findings(items, pass_label, [seg.id],
+                                                segment_text=seg.fenster_text)
                 all_findings.extend(findings)
 
             logger.info(

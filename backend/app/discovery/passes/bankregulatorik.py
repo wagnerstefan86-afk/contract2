@@ -1,7 +1,8 @@
 """Pass 4: Bankregulatorik — banking regulatory risk analysis.
 
 Goal: identify IT-outsourcing risks from a banking regulatory perspective
-(KWG, MaRisk, BAIT, DORA). Highly selective: max 3 findings per segment.
+(KWG, MaRisk, BAIT, DORA). Uses the shared material-risk extraction prompt
+with additional regulatory focus. Max 3 findings per segment.
 """
 
 from __future__ import annotations
@@ -10,51 +11,31 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-RISK_LEVEL_MAP = {
-    "kritisch": "Kritisch",
-    "hoch": "Hoch",
-    "mittel": "Mittel",
-    "niedrig": "Niedrig",
-}
+REGULATORY_FOCUS = """
 
-SYSTEM_PROMPT = """Du bist ein erfahrener IT-Outsourcing-Jurist mit Schwerpunkt Bankregulatorik (KWG, MaRisk, BAIT, DORA).
-Analysiere den folgenden Vertragsabschnitt aus Sicht des Auftragnehmers.
-Melde nur Risiken, die für einen IT-Dienstleister wirtschaftlich, rechtlich oder operativ relevant sein können.
+Additional focus — Banking Regulatory perspective (KWG, MaRisk, BAIT, DORA):
+You are an IT outsourcing lawyer specialized in banking regulation.
+Only report risks that are economically, legally, or operationally relevant
+for an IT service provider.
 
-IGNORIERE:
-- rein deklarative Formulierungen
-- Definitionen ohne operative Wirkung
-- Wiederholungen bereits erkannter Risiken
-- rein organisatorische Klauseln ohne Risiko
+Focus on:
+- Unilateral instruction rights
+- Regulatory pass-through (obligations that belong to the regulated client)
+- Unlimited or unclear liability consequences
+- Unclear service scope
+- Audit or reporting obligations without limits
+- Subcontractor liability
+- Exit or data handover obligations
+- Incident or BCM obligations
 
-Ein Risiko liegt insbesondere vor bei:
-- einseitigen Weisungsrechten
-- regulatorischer Durchreichung
-- unbegrenzten oder unklaren Haftungsfolgen
-- unklaren Leistungsumfängen
-- Audit- oder Berichtspflichten ohne Begrenzung
-- Subunternehmerhaftung
-- Exit- oder Datenherausgabe
-- Incident- oder BCM-Verpflichtungen
+Maximum 3 findings per text segment. Choose only the most material ones.
+If the segment contains no material regulatory risk, return NO_FINDING."""
 
-Wenn mehrere Sätze denselben Risikotyp betreffen, melde sie als separate Belege, aber mit derselben Kategorie.
-
-AUSGABEFORMAT (JSON):
-Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
-{
-  "title": "kurzer präziser Titel",
-  "category": "Weisungsrecht | Audit | Compliance | Haftung | BCM | Incident | Subunternehmer | Exit | Leistungsumfang",
-  "risk_level": "kritisch | hoch | mittel | niedrig",
-  "textstelle": "Originaltext aus dem Vertrag",
-  "kurzbeschreibung": "kurze Erklärung des Risikos"
-}
-
-Erzeuge maximal 3 Risiken pro Textsegment.
-Wenn du KEINE relevanten Risiken findest, antworte mit einem leeren Array: []"""
+SYSTEM_PROMPT = MATERIAL_RISK_SYSTEM_PROMPT + REGULATORY_FOCUS
 
 MAX_FINDINGS_PER_SEGMENT = 3
 
@@ -72,8 +53,9 @@ class BankregulatorikPass(DiscoveryPass):
 
         for seg in segments:
             user_prompt = (
-                f"Analysiere den folgenden Vertragsabschnitt aus bankregulatorischer Sicht. "
-                f"Maximal 3 Risiken.\n\n"
+                f"Analyze the following contract section from a banking regulatory perspective. "
+                f"Maximum 3 material risks. "
+                f"Return NO_FINDING if no material risk exists.\n\n"
                 f"{seg.fenster_text}"
             )
 
@@ -85,39 +67,20 @@ class BankregulatorikPass(DiscoveryPass):
                 max_tokens=4096,
             )
 
-            findings = self._parse_bankregulatorik_findings(items, [seg.id])
+            # Limit to max findings per segment
+            findings = self._parse_findings(
+                items[:MAX_FINDINGS_PER_SEGMENT] if len(items) > MAX_FINDINGS_PER_SEGMENT else items,
+                self.name, [seg.id],
+                segment_text=seg.fenster_text,
+            )
+
+            if len(items) > MAX_FINDINGS_PER_SEGMENT:
+                logger.warning(
+                    f"Bankregulatorik-Pass: LLM lieferte {len(items)} Findings, "
+                    f"auf {MAX_FINDINGS_PER_SEGMENT} begrenzt"
+                )
+
             all_findings.extend(findings)
 
         logger.info(f"Bankregulatorik-Pass: {len(all_findings)} Fundstellen insgesamt")
         return all_findings
-
-    def _parse_bankregulatorik_findings(
-        self, items: list[dict], segment_ids: list[str]
-    ) -> list[RawFinding]:
-        """Parse the simplified banking regulatory JSON into RawFinding objects."""
-        findings = []
-        for item in items[:MAX_FINDINGS_PER_SEGMENT]:
-            if not isinstance(item, dict):
-                continue
-            try:
-                raw_risk = str(item.get("risk_level", "niedrig")).lower()
-                findings.append(RawFinding(
-                    textstelle=str(item.get("textstelle", "")),
-                    kategorie=str(item.get("category", "Compliance")),
-                    kurzbeschreibung=str(item.get("title", "")),
-                    erklaerung=str(item.get("kurzbeschreibung", "")),
-                    empfehlung="",
-                    risikostufe=RISK_LEVEL_MAP.get(raw_risk, "Niedrig"),
-                    segment_ids=segment_ids,
-                    quelle_pass=self.name,
-                ))
-            except Exception:
-                continue
-
-        if len(items) > MAX_FINDINGS_PER_SEGMENT:
-            logger.warning(
-                f"Bankregulatorik-Pass: LLM lieferte {len(items)} Findings, "
-                f"auf {MAX_FINDINGS_PER_SEGMENT} begrenzt"
-            )
-
-        return findings

@@ -412,6 +412,11 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
             pruef_status=PruefStatus.OFFEN.value,
             detail=detail,
             zusammenfuehrung=cf.merge_info(),
+            # Paragraph-level evidence fields
+            scope_type=raw.scope_type or None,
+            scope_text=raw.scope_text or None,
+            trigger_spans=raw.trigger_spans or None,
+            evidence_heading_path=raw.evidence_heading_path or None,
         )
         db.add(fundstelle)
         persisted_fundstellen.append(fundstelle)
@@ -659,4 +664,13 @@ def _raw_finding_to_dict(f: RawFinding) -> dict:
         d["bieterfrage"] = f.bieterfrage
     if f.verhandlungsargumente:
         d["verhandlungsargumente"] = f.verhandlungsargumente
+    # Paragraph-level evidence fields
+    if f.scope_type:
+        d["scope_type"] = f.scope_type
+    if f.scope_text:
+        d["scope_text"] = f.scope_text
+    if f.trigger_spans:
+        d["trigger_spans"] = f.trigger_spans
+    if f.evidence_heading_path:
+        d["evidence_heading_path"] = f.evidence_heading_path
     return d
