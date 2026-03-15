@@ -130,6 +130,22 @@ If no paragraphs contain material risks, return: [{"result": "NO_FINDING"}]
 Categories: Weisungsrecht, Audit, Haftung, Reporting, Compliance, SLA, Subunternehmer, Informationssicherheit, Datenschutz, Verfügbarkeit & Betrieb, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten, BCM, Incident, Exit
 
 --------------------------------
+EVIDENCE RULE
+--------------------------------
+scope_text MUST contain the exact original contract wording from the
+paragraph or clause that triggered the finding.
+Do NOT paraphrase, summarize, or rewrite the clause.
+The explanation of the risk must be placed only in the "description" field.
+
+Correct example:
+  scope_text: "The contractor shall remain fully liable for the actions of any subcontractors."
+  description: "The clause creates unlimited liability for subcontractor actions."
+
+Incorrect example:
+  scope_text: "The contractor carries full responsibility for subcontractors."
+  (This is a paraphrase — not the original text.)
+
+--------------------------------
 QUALITY REQUIREMENTS
 --------------------------------
 - Only extract risks that a legal or security reviewer would actually discuss.
@@ -178,9 +194,15 @@ class DiscoveryPass(ABC):
             if item.get("result") == "NO_FINDING":
                 continue
             try:
-                # Determine scope_text with quality guardrail
+                # Determine scope_text with quality guardrails
                 scope_text = str(item.get("scope_text", ""))
                 if scope_text and len(scope_text) < MIN_SCOPE_TEXT_LENGTH and segment_text:
+                    scope_text = segment_text
+                # Evidence integrity: if scope_text looks paraphrased
+                # (not found in segment text), replace with original
+                if (scope_text and segment_text
+                        and scope_text not in segment_text
+                        and len(scope_text) > 20):
                     scope_text = segment_text
 
                 # Map new format fields to RawFinding, with legacy fallback

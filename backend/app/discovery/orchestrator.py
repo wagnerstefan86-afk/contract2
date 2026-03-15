@@ -34,6 +34,7 @@ from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.final_editorial import final_editorial_pass
 from app.discovery.passes.base import RawFinding
+from app.discovery.dedup import deduplicate_raw_findings
 from app.models.risikothema import RisikoThema, risikothema_fundstellen
 
 logger = logging.getLogger(__name__)
@@ -291,6 +292,25 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
     all_raw_findings.extend(findings_p4)
     await db.commit()
 
+    # --- Step 4a: Early semantic deduplication ---
+    t0 = time.monotonic()
+    dedup_result = deduplicate_raw_findings(all_raw_findings)
+    dur_dedup = round(time.monotonic() - t0, 1)
+
+    all_raw_findings = dedup_result.findings
+
+    auswertung["dedup"] = {
+        "raw_findings_before_dedup": dedup_result.raw_before,
+        "raw_findings_after_dedup": dedup_result.raw_after,
+        "duplicates_removed": dedup_result.duplicates_removed,
+        "dauer_sekunden": dur_dedup,
+    }
+    await _log(db, aid, vid,
+               f"Early dedup: {dedup_result.raw_before} → {dedup_result.raw_after} "
+               f"findings ({dedup_result.duplicates_removed} duplicates removed, {dur_dedup}s).",
+               details=auswertung["dedup"])
+    await db.commit()
+
     # --- Step 4b: Topic Clustering ---
     await _update_analyse(db, analyse, AnalyseStatus.CLUSTERING.value, "Topic Clustering", 85)
     await _log(db, aid, vid,
@@ -368,6 +388,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         "pass2_sekunden": dur_p2,
         "pass3_sekunden": dur_p3,
         "pass4_sekunden": dur_p4,
+        "dedup_sekunden": dur_dedup,
         "clustering_sekunden": dur_cluster,
         "konsolidierung_sekunden": dur_cons,
     }
