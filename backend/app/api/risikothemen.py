@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from difflib import SequenceMatcher
+
 from app.database import get_db
 from app.auth import get_current_user
 from app.models.benutzer import Benutzer
@@ -31,11 +33,24 @@ router = APIRouter(prefix="/risikothemen", tags=["Risikothemen"])
 # Maximum evidence items per theme in the response
 MAX_EVIDENCES_PER_THEME = 3
 
+# Similarity threshold: evidences above this are considered near-duplicates
+_EVIDENCE_SIMILARITY_THRESHOLD = 0.80
+
+
+def _is_similar_to_any(text: str, existing_texts: list[str], threshold: float = _EVIDENCE_SIMILARITY_THRESHOLD) -> bool:
+    """Check if text is semantically similar to any already-selected evidence."""
+    norm = text.strip().lower()
+    for et in existing_texts:
+        if SequenceMatcher(None, norm, et).ratio() > threshold:
+            return True
+    return False
+
 
 def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) -> list[EvidenceItem]:
     """Extract deduplicated, diverse evidence items from Fundstelle objects.
 
     Diversity rules:
+    - Reject semantically near-identical evidences (similarity > 0.80)
     - Prefer evidences from different segments/paragraphs
     - Prefer evidences from different heading paths
     - Falls back to textstelle if scope_text is missing
@@ -63,19 +78,18 @@ def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) ->
     # Sort by scope_text length descending (prefer richer evidence)
     candidates.sort(key=lambda c: len(c[0]), reverse=True)
 
-    # Greedy selection: prefer diversity across segments and headings
-    seen_texts: set[str] = set()
+    # Track selected evidence texts for similarity comparison
+    selected_texts: list[str] = []
     seen_segments: set[str] = set()
-    seen_headings: set[str] = set()
     evidences: list[EvidenceItem] = []
 
-    # First pass: pick from unseen segments
+    # First pass: pick from unseen segments, reject semantic near-duplicates
     for scope_text, segment_id, heading_path, fs in candidates:
         if len(evidences) >= limit:
             break
 
-        dedup_key = scope_text.strip().lower()[:200]
-        if dedup_key in seen_texts:
+        # Semantic near-duplicate check against already-selected evidences
+        if _is_similar_to_any(scope_text, selected_texts):
             continue
 
         # Prefer unseen segment
@@ -83,11 +97,9 @@ def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) ->
         if seg_key and seg_key in seen_segments:
             continue
 
-        seen_texts.add(dedup_key)
+        selected_texts.append(scope_text.strip().lower())
         if seg_key:
             seen_segments.add(seg_key)
-        if heading_path:
-            seen_headings.add(heading_path)
 
         evidences.append(EvidenceItem(
             scope_text=scope_text,
@@ -102,11 +114,11 @@ def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) ->
             if len(evidences) >= limit:
                 break
 
-            dedup_key = scope_text.strip().lower()[:200]
-            if dedup_key in seen_texts:
+            # Semantic near-duplicate check
+            if _is_similar_to_any(scope_text, selected_texts):
                 continue
 
-            seen_texts.add(dedup_key)
+            selected_texts.append(scope_text.strip().lower())
             evidences.append(EvidenceItem(
                 scope_text=scope_text,
                 segment_id=segment_id,
