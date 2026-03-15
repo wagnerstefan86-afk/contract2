@@ -47,6 +47,7 @@ async def demo_vertrag_anlegen(user: Benutzer = Depends(get_current_user), db: A
 class PlainTextInput(BaseModel):
     text: str
     dateiname: str = "Freitext-Eingabe"
+    perspective: str = "provider"
 
 
 @router.post("/text-analyse", response_model=AnalyseResponse, status_code=201)
@@ -73,11 +74,11 @@ async def text_analyse(eingabe: PlainTextInput, user: Benutzer = Depends(get_cur
     await db.refresh(analyse)
 
     analyse_id = analyse.id
-    asyncio.create_task(_run_bg(analyse_id))
+    asyncio.create_task(_run_bg(analyse_id, perspective=eingabe.perspective))
 
     return analyse
 
 
-async def _run_bg(analyse_id: uuid.UUID) -> None:
+async def _run_bg(analyse_id: uuid.UUID, perspective: str = "provider") -> None:
     async with async_session() as db:
-        await run_discovery(analyse_id, db)
+        await run_discovery(analyse_id, db, perspective=perspective)

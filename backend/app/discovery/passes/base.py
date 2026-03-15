@@ -219,6 +219,57 @@ def _format_verhandlungsargumente(value) -> str:
     return str(value) if value else ""
 
 
+# ---------------------------------------------------------------------------
+# Analysis perspective definitions
+# ---------------------------------------------------------------------------
+
+VALID_PERSPECTIVES = ("provider", "client", "neutral")
+
+PERSPECTIVE_PROMPTS: dict[str, str] = {
+    "provider": (
+        "\n\n--------------------------------\n"
+        "ANALYSIS PERSPECTIVE: SERVICE PROVIDER (Auftragnehmer)\n"
+        "--------------------------------\n"
+        "You are reviewing this contract on behalf of the IT service provider (Auftragnehmer).\n"
+        "Identify clauses that increase operational, legal, or financial risk FOR THE PROVIDER.\n"
+        "Focus on: one-sided obligations imposed on the provider, unlimited liability, "
+        "scope creep, unilateral client rights, unrealistic SLAs, cost risks, "
+        "regulatory pass-through, and exit obligations.\n"
+        "Risks that only affect the client are NOT relevant."
+    ),
+    "client": (
+        "\n\n--------------------------------\n"
+        "ANALYSIS PERSPECTIVE: CLIENT (Auftraggeber)\n"
+        "--------------------------------\n"
+        "You are reviewing this contract on behalf of the client (Auftraggeber).\n"
+        "Identify clauses that weaken regulatory control, auditability, or resilience "
+        "FROM THE CLIENT'S PERSPECTIVE.\n"
+        "Focus on: insufficient audit rights, weak reporting obligations, "
+        "unclear subcontracting controls, missing liability protections, "
+        "inadequate BCM/DR requirements, gaps in data protection safeguards, "
+        "and insufficient exit/transition provisions.\n"
+        "Risks that only affect the provider are NOT relevant."
+    ),
+    "neutral": (
+        "\n\n--------------------------------\n"
+        "ANALYSIS PERSPECTIVE: NEUTRAL / STRUCTURAL\n"
+        "--------------------------------\n"
+        "You are reviewing this contract from a neutral, structural perspective.\n"
+        "Identify clauses that represent structural contract risks INDEPENDENT OF PARTY.\n"
+        "Focus on: ambiguous scope definitions, missing escalation procedures, "
+        "contradictory clauses, undefined terms, gaps in change management, "
+        "unclear governance structures, missing dispute resolution mechanisms, "
+        "and provisions that create legal uncertainty for either party.\n"
+        "Do not favor either party — assess the contract's structural soundness."
+    ),
+}
+
+
+def get_perspective_prompt(perspective: str) -> str:
+    """Return the perspective prompt fragment, or empty string for default (provider)."""
+    return PERSPECTIVE_PROMPTS.get(perspective, PERSPECTIVE_PROMPTS["provider"])
+
+
 class DiscoveryPass(ABC):
     """Abstract base for a discovery pass."""
 
@@ -230,6 +281,7 @@ class DiscoveryPass(ABC):
         segments: list[Segment],
         config: LLMConfig,
         full_text: str,
+        perspective: str = "provider",
     ) -> list[RawFinding]:
         """Run this pass and return raw findings."""
         ...

@@ -10,27 +10,24 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT, get_perspective_prompt
 
 logger = logging.getLogger(__name__)
 
 PASS_CONTEXT = """
 
-Additional context for this pass:
-You are reviewing an IT outsourcing contract from the perspective of the contractor (Auftragnehmer / IT service provider).
-Focus areas for this broad initial scan:
+Additional context for this pass — broad initial scan:
+Focus areas:
 - Deadlines and response times (unrealistically short?)
 - Penalty clauses (disproportionate?)
 - Liability provisions (missing caps? unlimited?)
 - Warranties and representations (overly broad?)
 - One-sided obligations or restrictions
-- Unilateral rights of the client (termination, changes, instructions)
+- Unilateral rights (termination, changes, instructions)
 - References to external documents or standards (uncontrollable?)
 - Missing provisions (what is not regulated can be dangerous)
 - Auto-renewal and long lock-in periods
 - Transition obligations at contract end"""
-
-SYSTEM_PROMPT = MATERIAL_RISK_SYSTEM_PROMPT + PASS_CONTEXT
 
 
 class BreitPass(DiscoveryPass):
@@ -41,21 +38,23 @@ class BreitPass(DiscoveryPass):
         segments: list[Segment],
         config: LLMConfig,
         full_text: str,
+        perspective: str = "provider",
     ) -> list[RawFinding]:
         all_findings: list[RawFinding] = []
+        system_prompt = MATERIAL_RISK_SYSTEM_PROMPT + get_perspective_prompt(perspective) + PASS_CONTEXT
 
         for seg in segments:
             logger.info(f"Breit-Pass: Segment {seg.id}")
             user_prompt = (
                 f"Analyze the following contract section. "
-                f"Extract only MATERIAL contractual risks for the contractor. "
+                f"Extract only MATERIAL contractual risks. "
                 f"Return NO_FINDING if no material risk exists.\n\n"
                 f"{seg.fenster_text}"
             )
 
             items = await llm_json_completion(
                 config=config,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.3,
                 max_tokens=4096,

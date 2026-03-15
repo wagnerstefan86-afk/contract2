@@ -11,7 +11,7 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT, get_perspective_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,14 @@ class PerspektivePass(DiscoveryPass):
         segments: list[Segment],
         config: LLMConfig,
         full_text: str,
+        perspective: str = "provider",
     ) -> list[RawFinding]:
         all_findings: list[RawFinding] = []
+        perspective_prompt = get_perspective_prompt(perspective)
 
         for perspektive_name, focus_instructions in PERSPEKTIVEN:
             logger.info(f"Perspektive-Pass: {perspektive_name}")
-            system = MATERIAL_RISK_SYSTEM_PROMPT + f"\n\n{focus_instructions}"
+            system = MATERIAL_RISK_SYSTEM_PROMPT + perspective_prompt + f"\n\n{focus_instructions}"
 
             for seg in segments:
                 user_prompt = (

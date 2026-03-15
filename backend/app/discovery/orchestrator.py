@@ -33,7 +33,7 @@ from app.discovery.passes.themen_cluster import (
 from app.discovery.consolidation import konsolidiere, ConsolidatedFinding
 from app.discovery.anreicherung import anreichern
 from app.discovery.final_editorial import final_editorial_pass
-from app.discovery.passes.base import RawFinding
+from app.discovery.passes.base import RawFinding, VALID_PERSPECTIVES
 from app.discovery.dedup import deduplicate_raw_findings
 from app.models.risikothema import RisikoThema, risikothema_fundstellen
 
@@ -65,12 +65,19 @@ async def _update_analyse(db: AsyncSession, analyse: Analyse,
     await db.flush()
 
 
-async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession) -> None:
+async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession,
+                        perspective: str = "provider") -> None:
     """Run the full discovery pipeline for one analysis.
 
     This is the main entry point called by the background task.
     It manages its own commits and error handling.
+
+    Args:
+        perspective: Analysis perspective — "provider", "client", or "neutral".
     """
+    if perspective not in VALID_PERSPECTIVES:
+        perspective = "provider"
+
     analyse = await db.get(Analyse, analyse_id)
     if not analyse:
         logger.error(f"Analyse {analyse_id} nicht gefunden")
@@ -82,7 +89,7 @@ async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession) -> None:
         return
 
     try:
-        await _run_pipeline(db, analyse, vertrag)
+        await _run_pipeline(db, analyse, vertrag, perspective=perspective)
     except Exception as e:
         logger.exception(f"Discovery-Pipeline fehlgeschlagen: {e}")
         analyse.status = AnalyseStatus.FEHLGESCHLAGEN.value
@@ -95,7 +102,8 @@ async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession) -> None:
         await db.commit()
 
 
-async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) -> None:
+async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
+                        perspective: str = "provider") -> None:
     """Inner pipeline logic with full observability."""
 
     vid = vertrag.id
@@ -104,10 +112,11 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     # Accumulates evaluation data for the auswertung field
     auswertung: dict = {"passes": {}, "segmente": {}, "konsolidierung": {}, "zeiten": {}}
+    auswertung["perspective"] = perspective
 
     # --- Step 1: Text extraction ---
     await _update_analyse(db, analyse, AnalyseStatus.GESTARTET.value, "Textextraktion", 5)
-    await _log(db, aid, vid, "Analyse gestartet. Textextraktion beginnt.")
+    await _log(db, aid, vid, f"Analyse gestartet (Perspektive: {perspective}). Textextraktion beginnt.")
     await db.commit()
 
     if vertrag.volltext:
@@ -182,7 +191,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     t0 = time.monotonic()
     pass1 = BreitPass()
-    findings_p1 = await pass1.run(segments, llm_config, full_text)
+    findings_p1 = await pass1.run(segments, llm_config, full_text, perspective=perspective)
     dur_p1 = round(time.monotonic() - t0, 1)
 
     p1_cats = Counter(f.kategorie for f in findings_p1)
@@ -209,7 +218,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     t0 = time.monotonic()
     pass2 = PerspektivePass()
-    findings_p2 = await pass2.run(segments, llm_config, full_text)
+    findings_p2 = await pass2.run(segments, llm_config, full_text, perspective=perspective)
     dur_p2 = round(time.monotonic() - t0, 1)
 
     # Break down pass 2 by perspective
@@ -245,7 +254,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     t0 = time.monotonic()
     pass3 = ImplizitPass()
-    findings_p3 = await pass3.run(segments, llm_config, full_text)
+    findings_p3 = await pass3.run(segments, llm_config, full_text, perspective=perspective)
     dur_p3 = round(time.monotonic() - t0, 1)
 
     p3_cats = Counter(f.kategorie for f in findings_p3)
@@ -272,7 +281,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     t0 = time.monotonic()
     pass4 = BankregulatorikPass()
-    findings_p4 = await pass4.run(segments, llm_config, full_text)
+    findings_p4 = await pass4.run(segments, llm_config, full_text, perspective=perspective)
     dur_p4 = round(time.monotonic() - t0, 1)
 
     p4_cats = Counter(f.kategorie for f in findings_p4)
@@ -671,6 +680,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
         pass
 
     analysis_stats = {
+        "perspective": perspective,
         "raw_findings": dedup_result.raw_before,
         "after_pass_dedup": dedup_result.after_pass_dedup,
         "after_cross_dedup": dedup_result.after_cross_dedup,

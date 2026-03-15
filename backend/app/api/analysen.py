@@ -132,7 +132,12 @@ async def analyse_erwartungspruefung(analyse_id: uuid.UUID, user: Benutzer = Dep
 
 
 @router.post("/vertrag/{vertrag_id}", response_model=AnalyseResponse, status_code=201)
-async def analyse_starten(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def analyse_starten(
+    vertrag_id: uuid.UUID,
+    perspective: str = "provider",
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     vertrag = await db.get(Vertrag, vertrag_id)
     if not vertrag:
         raise HTTPException(status_code=404, detail="Vertrag nicht gefunden")
@@ -144,12 +149,13 @@ async def analyse_starten(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_cu
 
     # Launch discovery pipeline as background task with its own DB session
     analyse_id = analyse.id
-    asyncio.create_task(_run_discovery_background(analyse_id))
+    asyncio.create_task(_run_discovery_background(analyse_id, perspective=perspective))
 
     return analyse
 
 
-async def _run_discovery_background(analyse_id: uuid.UUID) -> None:
+async def _run_discovery_background(analyse_id: uuid.UUID,
+                                    perspective: str = "provider") -> None:
     """Run discovery in background with a fresh DB session."""
     async with async_session() as db:
-        await run_discovery(analyse_id, db)
+        await run_discovery(analyse_id, db, perspective=perspective)

@@ -11,7 +11,7 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT, get_perspective_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,6 @@ Focus on:
 Maximum 3 findings per text segment. Choose only the most material ones.
 If the segment contains no material regulatory risk, return NO_FINDING."""
 
-SYSTEM_PROMPT = MATERIAL_RISK_SYSTEM_PROMPT + REGULATORY_FOCUS
-
 MAX_FINDINGS_PER_SEGMENT = 3
 
 
@@ -48,8 +46,10 @@ class BankregulatorikPass(DiscoveryPass):
         segments: list[Segment],
         config: LLMConfig,
         full_text: str,
+        perspective: str = "provider",
     ) -> list[RawFinding]:
         all_findings: list[RawFinding] = []
+        system_prompt = MATERIAL_RISK_SYSTEM_PROMPT + get_perspective_prompt(perspective) + REGULATORY_FOCUS
 
         for seg in segments:
             user_prompt = (
@@ -61,7 +61,7 @@ class BankregulatorikPass(DiscoveryPass):
 
             items = await llm_json_completion(
                 config=config,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.2,
                 max_tokens=4096,

@@ -12,7 +12,7 @@ import logging
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT
+from app.discovery.passes.base import DiscoveryPass, RawFinding, MATERIAL_RISK_SYSTEM_PROMPT, get_perspective_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,6 @@ Look specifically for obligations NOT explicitly listed but implied through:
 
 Only create findings for actual material risks. Not every vague formulation is automatically a risk."""
 
-SYSTEM_PROMPT = MATERIAL_RISK_SYSTEM_PROMPT + IMPLICIT_FOCUS
-
-
 class ImplizitPass(DiscoveryPass):
     name = "Implizite Pflichten"
 
@@ -63,8 +60,10 @@ class ImplizitPass(DiscoveryPass):
         segments: list[Segment],
         config: LLMConfig,
         full_text: str,
+        perspective: str = "provider",
     ) -> list[RawFinding]:
         all_findings: list[RawFinding] = []
+        system_prompt = MATERIAL_RISK_SYSTEM_PROMPT + get_perspective_prompt(perspective) + IMPLICIT_FOCUS
 
         # Send full text if it fits, otherwise process larger segment windows
         MAX_CHARS = 12000  # roughly ~3k tokens
@@ -73,10 +72,10 @@ class ImplizitPass(DiscoveryPass):
             logger.info("Implizit-Pass: Gesamttext wird analysiert")
             items = await llm_json_completion(
                 config=config,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=(
-                    "Analyze the following contract for IMPLICIT and HIDDEN obligations "
-                    "for the contractor. Only identify material risks. "
+                    "Analyze the following contract for IMPLICIT and HIDDEN obligations. "
+                    "Only identify material risks. "
                     "Look for missing provisions, open references, and combination effects. "
                     "Return NO_FINDING if no material risk exists.\n\n"
                     f"{full_text}"
@@ -92,10 +91,10 @@ class ImplizitPass(DiscoveryPass):
             for seg in segments:
                 items = await llm_json_completion(
                     config=config,
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     user_prompt=(
                         "Analyze the following contract section for IMPLICIT and HIDDEN "
-                        "obligations for the contractor. Only material risks. "
+                        "obligations. Only material risks. "
                         "Return NO_FINDING if no material risk exists.\n\n"
                         f"{seg.fenster_text}"
                     ),
