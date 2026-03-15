@@ -155,6 +155,63 @@ QUALITY REQUIREMENTS
 - A good extraction result contains few but meaningful findings, not many weak signals."""
 
 
+def _extract_evidence_text(
+    llm_scope_text: str,
+    segment_text: str,
+    trigger_spans: list[str],
+) -> str:
+    """Extract evidence text that is guaranteed to be original contract wording.
+
+    Priority:
+    1. If trigger_spans exist and are found in segment_text, extract the
+       smallest substring containing all spans (with context padding).
+    2. If llm_scope_text is a verbatim substring of segment_text, use it.
+    3. Otherwise fall back to the full segment_text.
+
+    Never returns LLM-generated paraphrased text.
+    """
+    if not segment_text:
+        # No original text available — return whatever we have
+        return llm_scope_text
+
+    # Strategy 1: build evidence from trigger_spans found in segment
+    valid_spans = [s for s in trigger_spans if s and s in segment_text]
+    if valid_spans:
+        # Find the smallest window in segment_text that contains all spans
+        first_pos = min(segment_text.index(s) for s in valid_spans)
+        last_span = max(valid_spans, key=lambda s: segment_text.index(s) + len(s))
+        last_pos = segment_text.index(last_span) + len(last_span)
+
+        # Add context padding (up to 100 chars before/after), snapping to
+        # sentence boundaries where possible
+        ctx_start = max(0, first_pos - 100)
+        ctx_end = min(len(segment_text), last_pos + 100)
+        # Snap to sentence start
+        for boundary in ("\n", ". "):
+            bp = segment_text.rfind(boundary, ctx_start, first_pos)
+            if bp >= 0:
+                ctx_start = bp + len(boundary)
+                break
+        # Snap to sentence end
+        for boundary in ("\n", ". "):
+            bp = segment_text.find(boundary, last_pos, ctx_end)
+            if bp >= 0:
+                ctx_end = bp + len(boundary)
+                break
+
+        extracted = segment_text[ctx_start:ctx_end].strip()
+        if len(extracted) >= MIN_SCOPE_TEXT_LENGTH:
+            return extracted
+
+    # Strategy 2: llm_scope_text is verbatim from original
+    if llm_scope_text and llm_scope_text in segment_text:
+        if len(llm_scope_text) >= MIN_SCOPE_TEXT_LENGTH:
+            return llm_scope_text
+
+    # Strategy 3: fall back to full segment text
+    return segment_text
+
+
 def _format_verhandlungsargumente(value) -> str:
     """Convert verhandlungsargumente from list or string to a formatted string."""
     if isinstance(value, list):
@@ -194,16 +251,20 @@ class DiscoveryPass(ABC):
             if item.get("result") == "NO_FINDING":
                 continue
             try:
-                # Determine scope_text with quality guardrails
-                scope_text = str(item.get("scope_text", ""))
-                if scope_text and len(scope_text) < MIN_SCOPE_TEXT_LENGTH and segment_text:
-                    scope_text = segment_text
-                # Evidence integrity: if scope_text looks paraphrased
-                # (not found in segment text), replace with original
-                if (scope_text and segment_text
-                        and scope_text not in segment_text
-                        and len(scope_text) > 20):
-                    scope_text = segment_text
+                # --- Evidence extraction: always use original contract text ---
+                trigger_spans = item.get("trigger_spans")
+                if not isinstance(trigger_spans, list):
+                    trigger_spans = []
+                # Filter to only spans that actually appear in the segment
+                if segment_text and trigger_spans:
+                    trigger_spans = [s for s in trigger_spans
+                                     if isinstance(s, str) and s in segment_text]
+
+                scope_text = _extract_evidence_text(
+                    llm_scope_text=str(item.get("scope_text", "")),
+                    segment_text=segment_text,
+                    trigger_spans=trigger_spans,
+                )
 
                 # Map new format fields to RawFinding, with legacy fallback
                 textstelle = scope_text or str(item.get("textstelle", ""))
@@ -214,10 +275,6 @@ class DiscoveryPass(ABC):
 
                 raw_severity = str(item.get("severity", "") or item.get("risikostufe", "Niedrig"))
                 risikostufe = normalize_severity(raw_severity)
-
-                trigger_spans = item.get("trigger_spans")
-                if not isinstance(trigger_spans, list):
-                    trigger_spans = []
 
                 findings.append(RawFinding(
                     textstelle=textstelle[:2000],

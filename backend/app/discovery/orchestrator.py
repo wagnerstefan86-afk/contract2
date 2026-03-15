@@ -301,13 +301,17 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     auswertung["dedup"] = {
         "raw_findings_before_dedup": dedup_result.raw_before,
+        "after_pass_dedup": dedup_result.after_pass_dedup,
+        "after_cross_dedup": dedup_result.after_cross_dedup,
         "raw_findings_after_dedup": dedup_result.raw_after,
         "duplicates_removed": dedup_result.duplicates_removed,
         "dauer_sekunden": dur_dedup,
     }
     await _log(db, aid, vid,
-               f"Early dedup: {dedup_result.raw_before} → {dedup_result.raw_after} "
-               f"findings ({dedup_result.duplicates_removed} duplicates removed, {dur_dedup}s).",
+               f"Dedup: {dedup_result.raw_before} → "
+               f"{dedup_result.after_pass_dedup} (pass) → "
+               f"{dedup_result.after_cross_dedup} (cross-seg), "
+               f"{dedup_result.duplicates_removed} removed, {dur_dedup}s.",
                details=auswertung["dedup"])
     await db.commit()
 
@@ -668,7 +672,8 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
 
     analysis_stats = {
         "raw_findings": dedup_result.raw_before,
-        "after_dedup": dedup_result.raw_after,
+        "after_pass_dedup": dedup_result.after_pass_dedup,
+        "after_cross_dedup": dedup_result.after_cross_dedup,
         "after_consolidation": len(consolidated),
         "clusters": len(topic_clusters) if topic_clusters else 0,
         "kernthemen": kernthemen_count,
@@ -683,7 +688,8 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag) ->
                details=auswertung)
     logger.info(
         f"Pipeline summary: raw_findings={analysis_stats['raw_findings']}, "
-        f"after_dedup={analysis_stats['after_dedup']}, "
+        f"after_pass_dedup={analysis_stats['after_pass_dedup']}, "
+        f"after_cross_dedup={analysis_stats['after_cross_dedup']}, "
         f"clusters={analysis_stats['clusters']}, "
         f"kernthemen={analysis_stats['kernthemen']}, "
         f"evidence_count={analysis_stats['evidence_count']}"

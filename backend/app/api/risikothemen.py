@@ -29,55 +29,90 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/risikothemen", tags=["Risikothemen"])
 
 # Maximum evidence items per theme in the response
-MAX_EVIDENCES_PER_THEME = 5
+MAX_EVIDENCES_PER_THEME = 3
 
 
 def _build_evidences(fundstellen: list, limit: int = MAX_EVIDENCES_PER_THEME) -> list[EvidenceItem]:
-    """Extract deduplicated evidence items from Fundstelle objects.
+    """Extract deduplicated, diverse evidence items from Fundstelle objects.
 
-    Falls back to textstelle if scope_text is missing.
-    Returns at most `limit` items.
+    Diversity rules:
+    - Prefer evidences from different segments/paragraphs
+    - Prefer evidences from different heading paths
+    - Falls back to textstelle if scope_text is missing
+    - Returns at most `limit` items (default 3)
     """
-    seen_texts: set[str] = set()
-    evidences: list[EvidenceItem] = []
+    if not fundstellen:
+        return []
 
-    # Sort: prefer fundstellen with scope_text, then by text length descending
-    sorted_fs = sorted(
-        fundstellen,
-        key=lambda fs: (
-            bool(getattr(fs, "scope_text", None)),
-            len(getattr(fs, "scope_text", None) or getattr(fs, "textstelle", "") or ""),
-        ),
-        reverse=True,
-    )
-
-    for fs in sorted_fs:
+    # Build candidate list with metadata for diversity scoring
+    candidates: list[tuple[str, str | None, str | None, object]] = []
+    # (scope_text, segment_id, heading_path, fs_object)
+    for fs in fundstellen:
         scope_text = getattr(fs, "scope_text", None) or ""
-        # Fallback to textstelle if no scope_text
         if not scope_text:
             scope_text = getattr(fs, "textstelle", None) or ""
         if not scope_text:
             continue
 
-        # Deduplicate by normalized text
+        absatz_ids = getattr(fs, "absatz_ids", None)
+        segment_id = absatz_ids[0] if absatz_ids and isinstance(absatz_ids, list) else None
+        heading_path = getattr(fs, "evidence_heading_path", None)
+
+        candidates.append((scope_text, segment_id, heading_path, fs))
+
+    # Sort by scope_text length descending (prefer richer evidence)
+    candidates.sort(key=lambda c: len(c[0]), reverse=True)
+
+    # Greedy selection: prefer diversity across segments and headings
+    seen_texts: set[str] = set()
+    seen_segments: set[str] = set()
+    seen_headings: set[str] = set()
+    evidences: list[EvidenceItem] = []
+
+    # First pass: pick from unseen segments
+    for scope_text, segment_id, heading_path, fs in candidates:
+        if len(evidences) >= limit:
+            break
+
         dedup_key = scope_text.strip().lower()[:200]
         if dedup_key in seen_texts:
             continue
-        seen_texts.add(dedup_key)
 
-        # Extract segment_id
-        absatz_ids = getattr(fs, "absatz_ids", None)
-        segment_id = absatz_ids[0] if absatz_ids and isinstance(absatz_ids, list) else None
+        # Prefer unseen segment
+        seg_key = segment_id or ""
+        if seg_key and seg_key in seen_segments:
+            continue
+
+        seen_texts.add(dedup_key)
+        if seg_key:
+            seen_segments.add(seg_key)
+        if heading_path:
+            seen_headings.add(heading_path)
 
         evidences.append(EvidenceItem(
             scope_text=scope_text,
             segment_id=segment_id,
             trigger_spans=getattr(fs, "trigger_spans", None),
-            heading_path=getattr(fs, "evidence_heading_path", None),
+            heading_path=heading_path,
         ))
 
-        if len(evidences) >= limit:
-            break
+    # Second pass: fill remaining slots from any segment (if limit not reached)
+    if len(evidences) < limit:
+        for scope_text, segment_id, heading_path, fs in candidates:
+            if len(evidences) >= limit:
+                break
+
+            dedup_key = scope_text.strip().lower()[:200]
+            if dedup_key in seen_texts:
+                continue
+
+            seen_texts.add(dedup_key)
+            evidences.append(EvidenceItem(
+                scope_text=scope_text,
+                segment_id=segment_id,
+                trigger_spans=getattr(fs, "trigger_spans", None),
+                heading_path=heading_path,
+            ))
 
     return evidences
 
