@@ -31,7 +31,7 @@ class Fundstelle(Base):
     analyse_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("analysen.id", ondelete="CASCADE"))
     vertrag_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vertraege.id", ondelete="CASCADE"))
     textstelle: Mapped[str] = mapped_column(Text)
-    absatz_ids: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    absatz_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     kategorie: Mapped[str] = mapped_column(String(200))
     risikostufe: Mapped[str] = mapped_column(String(50), default=Risikostufe.HINWEIS.value)
     kurzbeschreibung: Mapped[str] = mapped_column(Text)
