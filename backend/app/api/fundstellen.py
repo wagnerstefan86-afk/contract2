@@ -1,13 +1,14 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.auth import get_current_user
 from app.models.benutzer import Benutzer
+from app.models.analyse import Analyse
 from app.models.fundstelle import Fundstelle
 from app.models.risikothema import RisikoThema
 from app.schemas.fundstelle import FundstelleResponse, FundstelleUpdate
@@ -117,19 +118,52 @@ def _themen_to_gruppen(themen: list[RisikoThema],
     }
 
 
+async def _latest_analyse_ids(db: AsyncSession,
+                              vertrag_id: uuid.UUID | None = None) -> list[uuid.UUID]:
+    """Find the latest analyse_id per contract.
+
+    Multiple pipeline runs on the same contract create separate Analyse rows,
+    each with their own RisikoThema set. We only want themes from the most
+    recent run per contract.
+    """
+    # Subquery: max(gestartet_am) per vertrag_id
+    sub = (
+        select(
+            Analyse.vertrag_id,
+            func.max(Analyse.gestartet_am).label("latest"),
+        )
+        .group_by(Analyse.vertrag_id)
+    )
+    if vertrag_id:
+        sub = sub.where(Analyse.vertrag_id == vertrag_id)
+    sub = sub.subquery()
+
+    # Join to get the actual analyse IDs matching the max timestamp
+    q = (
+        select(Analyse.id)
+        .join(sub, (Analyse.vertrag_id == sub.c.vertrag_id) & (Analyse.gestartet_am == sub.c.latest))
+    )
+    result = await db.execute(q)
+    return [row[0] for row in result.all()]
+
+
 async def _load_final_themen(db: AsyncSession,
                              vertrag_id: uuid.UUID | None = None) -> list[RisikoThema]:
-    """Load final-selected themes. If none, fall back to all themes.
+    """Load final-selected themes from the latest analysis per contract.
 
-    When vertrag_id is None, loads across all contracts.
+    Only includes themes from the most recent pipeline run to avoid
+    duplicates from repeated analyses on the same contract.
     """
+    analyse_ids = await _latest_analyse_ids(db, vertrag_id=vertrag_id)
+    if not analyse_ids:
+        return []
+
     q = (
         select(RisikoThema)
+        .where(RisikoThema.analyse_id.in_(analyse_ids))
         .options(selectinload(RisikoThema.fundstellen))
         .order_by(RisikoThema.sortierung)
     )
-    if vertrag_id:
-        q = q.where(RisikoThema.vertrag_id == vertrag_id)
 
     result = await db.execute(q)
     alle = list(result.scalars().all())
