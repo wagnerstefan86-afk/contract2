@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.discovery.llm_client import LLMConfig, llm_json_completion
+from app.discovery.passes.base import enrich_generic_title, normalize_user_facing_text
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,11 @@ SYSTEM_PROMPT = """Du bist ein erfahrener Vertragsexperte für IT-Outsourcing.
 Du erhältst eine Liste von Risikothemen aus einer Vertragsanalyse, jeweils mit zugeordneten Fundstellen.
 Deine Aufgabe: Reduziere auf die WIRKLICH verhandlungsrelevanten Kernthemen.
 
+SPRACH-REGEL (ZWINGEND):
+Alle Ausgaben MÜSSEN vollständig auf Deutsch verfasst sein.
+Kein Englisch in Titeln, Beschreibungen, Argumenten oder Fragen.
+Einzige Ausnahme: Etablierte Fachkürzel (SLA, BCM, DORA, ISO 27001).
+
 SELEKTIONSREGEL — Ein Thema bleibt NUR erhalten, wenn mindestens EINE dieser Fragen mit JA beantwortet wird:
 1. Begründet es ein eigenständiges wirtschaftliches, regulatorisches, operatives oder haftungsbezogenes Risiko?
 2. Würde man dafür eine eigene Verhandlungsklausel, Bieterfrage oder Management-Entscheidung formulieren?
@@ -61,26 +67,62 @@ EVIDENZ-REDUKTION:
 - Optional bis zu 2 Sekundärfundstellen (nur wenn sie den Risikokern wirklich zusätzlich stützen)
 - NICHT: 7, 10 oder 15 Evidenzen pro Thema
 
-TITEL-REGELN:
-- Präzise fachliche Titel, die den Verhandlungskern treffen
-- Keine generischen Kurzlabels
-- Keine falsche Wertung wie "unzureichend" wenn "überdehnt / einseitig / unklar / unbegrenzt" gemeint ist
+TITEL-REGELN (KRITISCH):
+- 5 bis 12 Wörter, verhandlungstauglich, das konkrete Problem benennend.
+- Der Titel muss den Risikocharakter enthalten: einseitig / unbegrenzt / unklar / offen / dynamisch.
+- VERBOTEN: Ein-Wort-Titel ("Haftung"), reine Kategorien ("Compliance"), vage Labels ("Audit").
+- VERBOTEN: Englische Titel oder englisch-deutsche Mischformen.
+- GUT: "Weitreichendes Weisungsrecht ohne belastbare Zumutbarkeitsgrenzen"
+- GUT: "Unbegrenzte Haftungsdurchreichung für Subunternehmer"
+- GUT: "Dynamische regulatorische Anpassungspflichten ohne klare Kostenregelung"
+- SCHLECHT: "Compliance", "Haftung", "Weisungsrecht", "Audit"
+
+KURZBESCHREIBUNG — Muss 2-3 Sätze enthalten:
+1. Was bewirkt die Klausel konkret? (Klauselwirkung)
+2. Welches konkrete Risiko entsteht daraus? (Praktisches Risiko)
+3. Warum ist dies in einer Vertragsverhandlung relevant? (Verhandlungsimplikation)
+NICHT: Titel wiederholen. NICHT: Vage Füllsätze. NICHT: "Dies könnte zu Problemen führen."
+Beispiel: "Der Auftragnehmer muss regulatorische Änderungen laufend umsetzen, ohne dass Kosten, Fristen oder Zumutbarkeitsgrenzen klar geregelt sind. Dadurch entsteht ein offenes Anpassungs- und Kostenrisiko."
+
+WARUM_VERHANDLUNGSRELEVANT — Muss konkret beantworten:
+"Warum ist das in einer Vertragsverhandlung konkret wichtig?"
+NICHT: Abstrakte KI-Kommentare wie "sollte geprüft werden" oder "könnte relevant sein".
+GUT: "Die Klausel erlaubt faktisch einseitige Leistungserweiterungen. Ohne klare Begrenzung kann der Auftraggeber zusätzliche Anforderungen durchsetzen, ohne dass Vergütung oder Zumutbarkeit sauber nachgezogen werden."
+
+ALTERNATIVFORMULIERUNG — Kurz, verwendbar, klauselartig:
+NICHT: Essay-Stil oder lange Erklärungen.
+GUT: "Der Auftragnehmer kann Weisungen ablehnen, soweit diese über den vertraglich vereinbarten Leistungsumfang hinausgehen oder wirtschaftlich unzumutbar sind."
+
+BIETERFRAGE — Konkret und beantwortbar:
+NICHT: Vage Meta-Fragen wie "Wie sehen Sie das?"
+GUT: "Ist der Auftraggeber bereit, eine Haftungsdeckelung von [X] EUR zu vereinbaren?"
+GUT: "Kann die Weisungsbefugnis auf den vertraglich definierten Leistungsumfang beschränkt werden?"
+
+VERHANDLUNGSARGUMENTE — Präzise Aufzählungspunkte mit konkreten Hebeln:
+- Operativer Mehraufwand / Personalbelastung
+- Kostenrisiko / fehlende Vergütungsklarheit
+- Haftungsungleichgewicht
+- Audit-/Prüfungsaufwand
+- Regulatorische Unsicherheit
+- Leistungsausweitung (Scope Creep)
+- Machbarkeitsgrenzen / technische Restriktionen
+NICHT: Generische Bullet-Points wie "Dies schafft Risiken." oder "Dies sollte geklärt werden."
 
 AUSGABEFORMAT — Antworte AUSSCHLIESSLICH mit einem JSON-Objekt:
 {
   "finale_themen": [
     {
       "quell_thema_index": 0,
-      "titel": "Präziser fachlicher Titel (mind. 5 Wörter)",
+      "titel": "Verhandlungstauglicher Titel (5-12 Wörter, deutsch, spezifisch)",
       "kategorie": "Kategorie",
       "risikostufe": "Hoch | Mittel | Niedrig",
-      "kurzbeschreibung": "Worin besteht das Risiko konkret? Warum ist es für den Auftragnehmer problematisch?",
-      "warum_verhandlungsrelevant": "Warum erfordert dies eine eigene Verhandlungsklausel?",
+      "kurzbeschreibung": "Klauselwirkung → konkretes Risiko → Verhandlungsimplikation (2-3 Sätze)",
+      "warum_verhandlungsrelevant": "Konkreter Grund, warum dies eine eigene Verhandlungsklausel erfordert",
       "primaerfundstelle_index": 0,
       "sekundaerfundstelle_indices": [1, 2],
-      "alternativformulierung": "Konkrete alternative Vertragsformulierung",
-      "bieterfrage": "Konkrete Bieterfrage zur Klärung",
-      "verhandlungsargumente": ["Argument 1", "Argument 2", "Argument 3"]
+      "alternativformulierung": "Kurze, klauselartige Alternativformulierung",
+      "bieterfrage": "Konkrete, beantwortbare Bieterfrage",
+      "verhandlungsargumente": ["Konkreter Hebel 1", "Konkreter Hebel 2", "Konkreter Hebel 3"]
     }
   ],
   "verworfene_themen": [
@@ -96,7 +138,8 @@ WICHTIG:
 - primaerfundstelle_index = Index der Fundstelle innerhalb der Fundstellen-Liste dieses Themas
 - sekundaerfundstelle_indices = Indices weiterer Fundstellen dieses Themas (max. 2)
 - Jedes Eingabe-Thema muss entweder in finale_themen oder verworfene_themen erscheinen
-- KEIN Thema darf in beiden Listen gleichzeitig sein"""
+- KEIN Thema darf in beiden Listen gleichzeitig sein
+- ALLE Texte müssen auf Deutsch sein"""
 
 
 @dataclass
@@ -253,18 +296,34 @@ def _parse_ergebnis(data: dict, anzahl_themen: int) -> EditorialErgebnis | None:
             if not isinstance(verhandlungsargs, list):
                 verhandlungsargs = [str(verhandlungsargs)] if verhandlungsargs else []
 
+            raw_titel = str(item.get("titel", ""))
+            raw_kategorie = str(item.get("kategorie", ""))
+            raw_kurz = str(item.get("kurzbeschreibung", ""))
+
+            # Post-process: enrich generic titles, normalize text
+            titel = enrich_generic_title(raw_titel, raw_kategorie, raw_kurz)
+            titel = normalize_user_facing_text(titel)
+
             finale.append(FinalesThema(
                 quell_thema_index=int(item.get("quell_thema_index", 0)),
-                titel=str(item.get("titel", "")),
-                kategorie=str(item.get("kategorie", "")),
+                titel=titel,
+                kategorie=raw_kategorie,
                 risikostufe=str(item.get("risikostufe", "Mittel")),
-                kurzbeschreibung=str(item.get("kurzbeschreibung", "")),
-                warum_verhandlungsrelevant=str(item.get("warum_verhandlungsrelevant", "")),
+                kurzbeschreibung=normalize_user_facing_text(raw_kurz),
+                warum_verhandlungsrelevant=normalize_user_facing_text(
+                    str(item.get("warum_verhandlungsrelevant", ""))
+                ),
                 primaerfundstelle_index=int(item.get("primaerfundstelle_index", 0)),
                 sekundaerfundstelle_indices=sek_indices,
-                alternativformulierung=str(item.get("alternativformulierung", "")),
-                bieterfrage=str(item.get("bieterfrage", "")),
-                verhandlungsargumente=[str(a) for a in verhandlungsargs],
+                alternativformulierung=normalize_user_facing_text(
+                    str(item.get("alternativformulierung", ""))
+                ),
+                bieterfrage=normalize_user_facing_text(
+                    str(item.get("bieterfrage", ""))
+                ),
+                verhandlungsargumente=[
+                    normalize_user_facing_text(str(a)) for a in verhandlungsargs
+                ],
             ))
         except (ValueError, TypeError):
             continue

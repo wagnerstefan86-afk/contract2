@@ -16,18 +16,18 @@ logger = logging.getLogger(__name__)
 
 PASS_CONTEXT = """
 
-Additional context for this pass — broad initial scan:
-Focus areas:
-- Deadlines and response times (unrealistically short?)
-- Penalty clauses (disproportionate?)
-- Liability provisions (missing caps? unlimited?)
-- Warranties and representations (overly broad?)
-- One-sided obligations or restrictions
-- Unilateral rights (termination, changes, instructions)
-- References to external documents or standards (uncontrollable?)
-- Missing provisions (what is not regulated can be dangerous)
-- Auto-renewal and long lock-in periods
-- Transition obligations at contract end"""
+Zusätzlicher Kontext für diesen Pass — Breite Ersterfassung:
+Schwerpunkte:
+- Fristen und Reaktionszeiten (unrealistisch kurz?)
+- Vertragsstrafen (unverhältnismäßig?)
+- Haftungsregelungen (fehlende Deckelungen? unbegrenzt?)
+- Gewährleistungen und Zusicherungen (zu weitgehend?)
+- Einseitige Pflichten oder Beschränkungen
+- Einseitige Rechte (Kündigung, Änderungen, Weisungen)
+- Verweise auf externe Dokumente oder Standards (unkontrollierbar?)
+- Fehlende Regelungen (was nicht geregelt ist, kann gefährlich sein)
+- Automatische Verlängerung und lange Bindungsfristen
+- Transitionspflichten bei Vertragsende"""
 
 
 class BreitPass(DiscoveryPass):
@@ -46,9 +46,9 @@ class BreitPass(DiscoveryPass):
         for seg in segments:
             logger.info(f"Breit-Pass: Segment {seg.id}")
             user_prompt = (
-                f"Analyze the following contract section. "
-                f"Extract only MATERIAL contractual risks. "
-                f"Return NO_FINDING if no material risk exists.\n\n"
+                f"Analysiere den folgenden Vertragsabschnitt. "
+                f"Extrahiere nur WESENTLICHE vertragliche Risiken. "
+                f"Antworte mit NO_FINDING falls kein wesentliches Risiko vorliegt.\n\n"
                 f"{seg.fenster_text}"
             )
 

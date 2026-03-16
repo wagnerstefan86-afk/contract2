@@ -63,96 +63,113 @@ MIN_SCOPE_TEXT_LENGTH = 80
 # Shared material-risk extraction prompt
 # ---------------------------------------------------------------------------
 
-MATERIAL_RISK_SYSTEM_PROMPT = """You are a contract risk extraction system for IT service provider contract reviews.
-Your task is NOT to list every potentially problematic sentence.
-Your task is to extract only MATERIAL contractual risks that would realistically be raised during a professional contract review.
+MATERIAL_RISK_SYSTEM_PROMPT = """Du bist ein Vertragsrisikoanalyse-System für die Prüfung von IT-Outsourcing-Verträgen.
+Deine Aufgabe ist NICHT, jeden potenziell problematischen Satz aufzulisten.
+Deine Aufgabe ist es, ausschließlich WESENTLICHE vertragliche Risiken zu extrahieren, die in einer professionellen Vertragsprüfung tatsächlich thematisiert würden.
 
-Important principle:
-Most paragraphs do NOT contain a standalone contractual risk.
-Only produce a finding when the paragraph contains a clear contractual risk that would require clarification, negotiation, or mitigation.
-
---------------------------------
-RISK DETECTION RULES
---------------------------------
-Create a finding ONLY if at least one of the following conditions is true:
-1. The contract creates a one-sided obligation or right
-   (e.g. unilateral instruction rights, unilateral changes, unilateral termination).
-2. Liability or responsibility is unclear, unlimited, or transferred broadly.
-3. The scope of services is vague, open-ended, or allows uncontrolled expansion.
-4. Compliance, security, regulatory, or reporting obligations are imposed without clear limits.
-5. Audit or control rights create operational or legal risk.
-6. Subcontracting or delegation creates unclear responsibility or liability.
-7. An obligation exists without defined limits, criteria, or boundaries.
-
-If none of these conditions apply, return: { "result": "NO_FINDING" }
+Grundprinzip:
+Die meisten Absätze enthalten KEIN eigenständiges vertragliches Risiko.
+Erzeuge nur dann einen Fund, wenn der Absatz ein klares vertragliches Risiko enthält, das Klärung, Verhandlung oder Absicherung erfordert.
 
 --------------------------------
-ANTI-NOISE RULES
+SPRACH-REGEL (ZWINGEND)
 --------------------------------
-DO NOT create a finding when:
-- The text only describes normal contractual structure.
-- The clause is neutral or balanced.
-- The clause merely references compliance or standards without imposing unclear obligations.
-- The risk only exists when taken out of context.
+Alle Ausgaben MÜSSEN auf Deutsch verfasst sein.
+Niemals Deutsch und Englisch mischen.
+scope_text enthält den exakten Originaltext aus dem Vertragsdokument — nur dieses Feld darf
+in der Originalsprache des Dokuments bleiben (auch wenn Englisch).
+Alle anderen Felder (description, category) MÜSSEN auf Deutsch sein.
 
 --------------------------------
-CONTEXT RULE
+RISIKOERKENNUNGSREGELN
 --------------------------------
-A finding must always be based on the full paragraph or clause context.
-Never generate findings based on isolated sentences or fragments.
+Erzeuge einen Fund NUR, wenn mindestens eine der folgenden Bedingungen zutrifft:
+1. Der Vertrag schafft eine einseitige Pflicht oder ein einseitiges Recht
+   (z.B. einseitiges Weisungsrecht, einseitige Änderungsrechte, einseitige Kündigung).
+2. Haftung oder Verantwortung ist unklar, unbegrenzt oder wird pauschal übertragen.
+3. Der Leistungsumfang ist vage, offen oder erlaubt eine unkontrollierte Ausweitung.
+4. Compliance-, Sicherheits-, regulatorische oder Reportingpflichten werden ohne klare Grenzen auferlegt.
+5. Audit- oder Kontrollrechte schaffen operatives oder rechtliches Risiko.
+6. Unterauftragsvergabe oder Delegation schafft unklare Verantwortung oder Haftung.
+7. Eine Verpflichtung besteht ohne definierte Grenzen, Kriterien oder Schranken.
+
+Trifft keine dieser Bedingungen zu, antworte: { "result": "NO_FINDING" }
 
 --------------------------------
-DEDUPLICATION RULE
+ANTI-NOISE-REGELN
 --------------------------------
-Each paragraph may produce at most one finding.
-If multiple potential risks appear in the paragraph,
-choose the single most relevant contractual risk.
+Erzeuge KEINEN Fund wenn:
+- Der Text nur die normale Vertragsstruktur beschreibt.
+- Die Klausel neutral oder ausgewogen ist.
+- Die Klausel nur auf Compliance oder Standards verweist, ohne unklare Pflichten aufzuerlegen.
+- Das Risiko nur aus dem Kontext gerissen existiert.
 
 --------------------------------
-OUTPUT FORMAT
+KONTEXTREGEL
 --------------------------------
-Return ONLY a JSON array (no markdown, no explanation).
-Each element is either a risk finding or a NO_FINDING marker:
+Ein Fund muss immer auf dem vollständigen Absatz- oder Klauselkontext basieren.
+Niemals Funde auf isolierten Sätzen oder Fragmenten erzeugen.
+
+--------------------------------
+DEDUPLIZIERUNGSREGEL
+--------------------------------
+Jeder Absatz darf höchstens einen Fund erzeugen.
+Erscheinen mehrere potenzielle Risiken im Absatz,
+wähle das einzelne relevanteste vertragliche Risiko.
+
+--------------------------------
+AUSGABEFORMAT
+--------------------------------
+Antworte AUSSCHLIESSLICH mit einem JSON-Array (kein Markdown, keine Erklärung).
+Jedes Element ist entweder ein Risikofund oder ein NO_FINDING-Marker:
 
 [
   {
     "scope_type": "paragraph",
-    "scope_text": "full paragraph text from the document",
-    "trigger_spans": ["short trigger phrase 1", "optional trigger phrase 2"],
-    "category": "CATEGORY",
+    "scope_text": "Exakter Originaltext des betroffenen Absatzes aus dem Dokument",
+    "trigger_spans": ["kurze Schlüsselphrase 1", "optionale Schlüsselphrase 2"],
+    "category": "KATEGORIE",
     "severity": "low|medium|high|critical",
-    "description": "short explanation of the contractual risk (2-3 sentences)"
+    "description": "Präzise Erklärung des vertraglichen Risikos auf Deutsch (2-3 Sätze). Beschreibe: (1) was die Klausel bewirkt, (2) welches konkrete Risiko daraus entsteht, (3) warum dies verhandlungsrelevant ist."
   }
 ]
 
-If no paragraphs contain material risks, return: [{"result": "NO_FINDING"}]
+Falls keine Absätze wesentliche Risiken enthalten: [{"result": "NO_FINDING"}]
 
-Categories: Weisungsrecht, Audit, Haftung, Reporting, Compliance, SLA, Subunternehmer, Informationssicherheit, Datenschutz, Verfügbarkeit & Betrieb, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten, BCM, Incident, Exit
-
---------------------------------
-EVIDENCE RULE
---------------------------------
-scope_text MUST contain the exact original contract wording from the
-paragraph or clause that triggered the finding.
-Do NOT paraphrase, summarize, or rewrite the clause.
-The explanation of the risk must be placed only in the "description" field.
-
-Correct example:
-  scope_text: "The contractor shall remain fully liable for the actions of any subcontractors."
-  description: "The clause creates unlimited liability for subcontractor actions."
-
-Incorrect example:
-  scope_text: "The contractor carries full responsibility for subcontractors."
-  (This is a paraphrase — not the original text.)
+Kategorien: Weisungsrecht, Audit, Haftung, Reporting, Compliance, SLA, Subunternehmer, Informationssicherheit, Datenschutz, Verfügbarkeit & Betrieb, Vertragsmanagement, Leistungsumfang & Abgrenzung, Personalanforderungen, Geistiges Eigentum, Implizite Pflichten, BCM, Incident, Exit
 
 --------------------------------
-QUALITY REQUIREMENTS
+EVIDENZREGEL
 --------------------------------
-- Only extract risks that a legal or security reviewer would actually discuss.
-- Prefer fewer, higher-quality findings.
-- Avoid creating multiple findings for variations of the same clause.
-- Never invent risks that are not clearly supported by the paragraph.
-- A good extraction result contains few but meaningful findings, not many weak signals."""
+scope_text MUSS den exakten Originalwortlaut aus dem Vertragsdokument enthalten,
+also den Absatz oder die Klausel, die den Fund ausgelöst hat.
+NICHT umformulieren, zusammenfassen oder umschreiben.
+Die Risikoerklärung gehört ausschließlich in das Feld "description".
+
+Korrektes Beispiel:
+  scope_text: "Der Auftragnehmer haftet unbeschränkt für das Handeln seiner Subunternehmer."
+  description: "Die Klausel begründet eine unbegrenzte Haftung für Subunternehmerhandlungen ohne Deckelung oder Rückgriffsmöglichkeit."
+
+Falsches Beispiel:
+  scope_text: "Der AN trägt die volle Verantwortung für Subunternehmer."
+  (Dies ist eine Umformulierung — nicht der Originaltext.)
+
+--------------------------------
+QUALITÄTSANFORDERUNGEN
+--------------------------------
+- Nur Risiken extrahieren, die ein Rechts- oder Sicherheitsprüfer tatsächlich besprechen würde.
+- Weniger, qualitativ hochwertige Funde sind besser als viele schwache Signale.
+- Keine mehrfachen Funde für Varianten derselben Klausel erzeugen.
+- Niemals Risiken erfinden, die nicht klar durch den Absatz gestützt werden.
+- Ein gutes Extraktionsergebnis enthält wenige, aber aussagekräftige Funde.
+
+--------------------------------
+BESCHREIBUNGSQUALITÄT
+--------------------------------
+Beschreibungen (description) sollen verhandlungstauglich formuliert sein:
+- Nicht: "Dies könnte zu Problemen führen."
+- Besser: "Die Klausel erlaubt dem Auftraggeber faktisch unbegrenzte Leistungserweiterungen. Ohne klare Abgrenzung kann der Leistungsumfang einseitig verändert werden, was zu unkontrollierbaren Kosten- und Ressourcenrisiken führt."
+- Struktur: Klauselwirkung → konkretes Risiko → Verhandlungsrelevanz."""
 
 
 def _extract_evidence_text(
@@ -268,6 +285,87 @@ PERSPECTIVE_PROMPTS: dict[str, str] = {
 def get_perspective_prompt(perspective: str) -> str:
     """Return the perspective prompt fragment, or empty string for default (provider)."""
     return PERSPECTIVE_PROMPTS.get(perspective, PERSPECTIVE_PROMPTS["provider"])
+
+
+# ---------------------------------------------------------------------------
+# Post-processing: lightweight text normalization for user-facing output
+# ---------------------------------------------------------------------------
+
+# Single-word or pure-category titles that must be rejected/enriched
+_GENERIC_TITLES = {
+    "haftung", "compliance", "audit", "exit", "reporting", "weisungsrecht",
+    "subunternehmer", "informationssicherheit", "datenschutz", "sla",
+    "verfügbarkeit", "vertragsmanagement", "leistungsumfang",
+    "personalanforderungen", "geistiges eigentum", "bcm", "incident",
+    "vertraulichkeit", "geheimhaltung", "regulatorik",
+}
+
+
+def normalize_user_facing_text(text: str) -> str:
+    """Lightweight normalization for user-facing generated text.
+
+    - Trims whitespace
+    - Removes leftover English boilerplate phrases
+    - Normalizes German punctuation/casing
+    """
+    if not text:
+        return text
+
+    text = text.strip()
+
+    # Remove common English boilerplate that LLMs sometimes inject
+    _EN_BOILERPLATE = [
+        "This clause ", "This creates ", "This could ", "This should ",
+        "The clause ", "The contractor ", "Note: ", "Important: ",
+        "Here is ", "Based on ", "In summary, ",
+    ]
+    for phrase in _EN_BOILERPLATE:
+        if text.startswith(phrase):
+            # Only strip if the rest is German (heuristic: contains common German words)
+            rest = text[len(phrase):]
+            if any(w in rest.lower() for w in ["der", "die", "das", "und", "oder", "für", "ist"]):
+                text = rest.strip()
+                # Capitalize first letter
+                if text:
+                    text = text[0].upper() + text[1:]
+                break
+
+    return text
+
+
+def is_generic_title(title: str) -> bool:
+    """Check if a title is too generic to be useful as a theme title."""
+    normalized = title.strip().lower().rstrip(".")
+    # Exact match against known generic terms
+    if normalized in _GENERIC_TITLES:
+        return True
+    # Too short (< 3 words)
+    words = normalized.split()
+    if len(words) < 3:
+        return True
+    return False
+
+
+def enrich_generic_title(title: str, kategorie: str, beschreibung: str) -> str:
+    """Attempt to enrich a generic title using available context.
+
+    Returns the original title if it's already specific enough.
+    """
+    if not is_generic_title(title):
+        return title
+
+    # Try to extract a better title from the first sentence of beschreibung
+    if beschreibung and len(beschreibung) > 20:
+        first_sentence = beschreibung.split(".")[0].strip()
+        # Must be reasonably short for a title
+        if 20 < len(first_sentence) <= 100 and len(first_sentence.split()) >= 4:
+            return first_sentence
+
+    # Fallback: combine title + category for minimal enrichment
+    if kategorie and kategorie.lower() != title.strip().lower():
+        return f"{title.strip()} — {kategorie}"
+
+    return title
 
 
 class DiscoveryPass(ABC):

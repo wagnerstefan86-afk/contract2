@@ -53,9 +53,9 @@ class BankregulatorikPass(DiscoveryPass):
 
         for seg in segments:
             user_prompt = (
-                f"Analyze the following contract section from a banking regulatory perspective. "
-                f"Maximum 3 material risks. "
-                f"Return NO_FINDING if no material risk exists.\n\n"
+                f"Analysiere den folgenden Vertragsabschnitt aus bankregulatorischer Perspektive. "
+                f"Maximal 3 wesentliche Risiken. "
+                f"Antworte mit NO_FINDING falls kein wesentliches regulatorisches Risiko vorliegt.\n\n"
                 f"{seg.fenster_text}"
             )
 

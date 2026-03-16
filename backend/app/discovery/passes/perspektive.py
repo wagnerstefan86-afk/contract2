@@ -101,9 +101,9 @@ class PerspektivePass(DiscoveryPass):
 
             for seg in segments:
                 user_prompt = (
-                    f"Analyze the following contract section from the '{perspektive_name}' perspective. "
-                    f"Extract only MATERIAL contractual risks. "
-                    f"Return NO_FINDING if no material risk exists.\n\n"
+                    f"Analysiere den folgenden Vertragsabschnitt aus der Perspektive '{perspektive_name}'. "
+                    f"Extrahiere nur WESENTLICHE vertragliche Risiken. "
+                    f"Antworte mit NO_FINDING falls kein wesentliches Risiko vorliegt.\n\n"
                     f"{seg.fenster_text}"
                 )
 

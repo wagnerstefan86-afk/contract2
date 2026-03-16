@@ -74,10 +74,10 @@ class ImplizitPass(DiscoveryPass):
                 config=config,
                 system_prompt=system_prompt,
                 user_prompt=(
-                    "Analyze the following contract for IMPLICIT and HIDDEN obligations. "
-                    "Only identify material risks. "
-                    "Look for missing provisions, open references, and combination effects. "
-                    "Return NO_FINDING if no material risk exists.\n\n"
+                    "Analysiere den folgenden Vertrag auf IMPLIZITE und VERDECKTE Pflichten. "
+                    "Nur wesentliche Risiken identifizieren. "
+                    "Achte auf fehlende Regelungen, offene Verweise und Kombinationseffekte. "
+                    "Antworte mit NO_FINDING falls kein wesentliches Risiko vorliegt.\n\n"
                     f"{full_text}"
                 ),
                 temperature=0.4,
@@ -93,9 +93,9 @@ class ImplizitPass(DiscoveryPass):
                     config=config,
                     system_prompt=system_prompt,
                     user_prompt=(
-                        "Analyze the following contract section for IMPLICIT and HIDDEN "
-                        "obligations. Only material risks. "
-                        "Return NO_FINDING if no material risk exists.\n\n"
+                        "Analysiere den folgenden Vertragsabschnitt auf IMPLIZITE und VERDECKTE "
+                        "Pflichten. Nur wesentliche Risiken. "
+                        "Antworte mit NO_FINDING falls kein wesentliches Risiko vorliegt.\n\n"
                         f"{seg.fenster_text}"
                     ),
                     temperature=0.4,

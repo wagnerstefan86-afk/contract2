@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import RawFinding
+from app.discovery.passes.base import RawFinding, is_generic_title, enrich_generic_title, normalize_user_facing_text
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ SYSTEM_PROMPT = """Du erhältst eine Liste von Risiko-Fundstellen aus einem IT-O
 Viele Fundstellen beschreiben denselben Risikokern.
 Fasse diese Fundstellen zu übergeordneten RISIKOTHEMEN zusammen.
 
+SPRACH-REGEL (ZWINGEND):
+Alle Ausgaben MÜSSEN vollständig auf Deutsch sein. Kein Englisch in Titeln, Beschreibungen oder Feldern.
+
 REGELN:
 1. Mehrere Fundstellen können zum selben Thema gehören.
 2. Ein Thema beschreibt den eigentlichen Risikokern, nicht einzelne Klauseln.
@@ -40,39 +43,52 @@ ZIELGRÖSSE:
 Erzeuge zwischen 5 und 12 Risikothemen. Weniger ist besser als zu viele.
 Lieber ein breites Thema mit 8 Evidence als zwei enge Themen mit je 2 Evidence.
 
-TITEL-REGELN (WICHTIG):
-- Verwende aussagekräftige, spezifische Titel mit mindestens 5 Wörtern.
-- NICHT: "Weisungsrecht" — zu kurz und generisch.
-- BESSER: "Weitreichendes Weisungs- und Anpassungsrecht des Auftraggebers"
-- Fasse Varianten zusammen: "Weisungsrecht", "Blanko-Weisungsrecht", "Einseitiges Weisungsrecht"
-  gehören alle zum selben Thema.
-- Der Titel soll den Risikokern beschreiben, nicht die Vertragsklausel.
-- Keine zwei Themen dürfen ähnliche oder redundante Titel haben.
+TITEL-REGELN (KRITISCH — GENAU BEFOLGEN):
+- Titel müssen verhandlungstauglich und spezifisch sein: 5–12 Wörter.
+- Der Titel muss das konkrete vertragliche Problem benennen, nicht die Kategorie.
+- Er muss den Risikocharakter (einseitig / unbegrenzt / unklar / offen) enthalten.
+- Er soll ohne Öffnen der Evidence verständlich sein.
+
+VERBOTENE Titelformen:
+- Ein-Wort-Titel: "Haftung", "Compliance", "Audit", "Exit"
+- Reine Kategorienamen: "Informationssicherheit", "Subunternehmer", "Weisungsrecht"
+- Vage Phrasen: "Verschiedene Risiken", "Problematische Klauseln"
+- Englische Begriffe (außer Fachbegriffe wie SLA, BCM, DORA): "Compliance Risks", "Scope Issues"
+
+GUTE Titelbeispiele:
+- "Weitreichendes Weisungsrecht ohne belastbare Zumutbarkeitsgrenzen"
+- "Unbegrenzte Haftungsdurchreichung für Subunternehmer"
+- "Dynamische regulatorische Anpassungspflichten ohne Kostenregelung"
+- "Unklar abgegrenzter Leistungsumfang mit einseitigem Erweiterungsrecht"
+- "Uneingeschränkte Audit-Zugangsrechte ohne Vorankündigungspflicht"
+- "Fehlende Haftungsdeckelung bei Datenschutzverstößen"
+
+SCHLECHTE Titelbeispiele (NICHT verwenden):
+- "Haftung" → zu generisch
+- "Compliance" → sagt nichts über das Risiko
+- "Audit" → beschreibt nur die Kategorie
+- "Weisungsrecht" → fehlt Risikorichtung
+
+BESCHREIBUNGSQUALITÄT:
+Die Beschreibung muss 2-3 Sätze enthalten, die klar benennen:
+1. Was bewirkt die Vertragsklausel konkret?
+2. Welches wirtschaftliche, rechtliche oder operative Risiko entsteht?
+3. Warum ist dies in einer Verhandlung relevant?
+Keine vagen Formulierungen wie "könnte problematisch sein" oder "sollte geprüft werden".
 
 ANTI-PATTERNS (VERMEIDE):
 - Themen mit nur 1 Evidence — ordne diese einem verwandten Thema zu.
 - Mehrere Themen zum gleichen Risikokern (z.B. "Haftung" und "Haftungsbegrenzung" → zusammenfassen).
-- Generische Ein-Wort-Titel wie "Haftung", "Compliance", "Exit".
-
-TYPISCHE THEMEN sind z.B.:
-- Weitreichende Weisungs- und Gestaltungsrechte des Auftraggebers
-- Unzureichende Audit- und Berichtspflichten
-- Fehlende regulatorische Durchreichung (MaRisk, BAIT, DORA)
-- Mangelhaftes Business Continuity Management und Notfallplanung
-- Unklare Incident-Management- und Meldepflichten
-- Risiken bei Subunternehmer-Steuerung und Weiterverlagerung
-- Unzureichende Exit- und Datenherausgabe-Regelungen
-- Einseitige Haftungsverteilung und Haftungsbegrenzungen
-- Unklarer oder einseitig definierbarer Leistungsumfang
+- Generische oder abstrakte Titel (siehe VERBOTENE Titelformen).
 
 AUSGABEFORMAT:
 Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 [
   {
-    "topic_title": "Aussagekräftiger Titel des Risikothemas (mind. 5 Wörter)",
+    "topic_title": "Verhandlungstauglicher Titel (5-12 Wörter, spezifisch, deutsch)",
     "category": "Kategorie",
     "risk_level": "Kritisch | Hoch | Mittel | Niedrig",
-    "beschreibung": "2-3 Sätze: Was ist der Risikokern und warum ist er für den Auftragnehmer relevant?",
+    "beschreibung": "2-3 Sätze: Klauselwirkung → konkretes Risiko → Verhandlungsrelevanz.",
     "evidence": [
       {
         "ursprungstitel": "Titel der ursprünglichen Fundstelle (exakt wie in der Liste)"
@@ -84,7 +100,8 @@ Antworte AUSSCHLIESSLICH mit einem JSON-Array. Jedes Element hat diese Felder:
 WICHTIG:
 - Verwende den exakten Titel (ursprungstitel) aus der Eingabeliste.
 - Jede Fundstelle muss genau EINEM Thema zugeordnet werden.
-- Erzeuge zwischen 5 und 12 Themen. Maximal 12."""
+- Erzeuge zwischen 5 und 12 Themen. Maximal 12.
+- Alle Texte in den Feldern topic_title, beschreibung und category MÜSSEN deutsch sein."""
 
 
 @dataclass
@@ -196,31 +213,28 @@ def _refine_clusters(clusters: list[TopicCluster]) -> list[TopicCluster]:
 
 
 def _normalize_titles(clusters: list[TopicCluster]) -> list[TopicCluster]:
-    """Ensure titles are descriptive, not short generic labels."""
+    """Ensure titles are descriptive, not short generic labels.
+
+    Uses the shared is_generic_title / enrich_generic_title helpers
+    to catch over-generic titles and improve them from beschreibung context.
+    """
     for cluster in clusters:
-        titel = cluster.titel.strip()
+        titel = cluster.titel.strip().rstrip(".")
 
-        # Remove trailing periods
-        titel = titel.rstrip(".")
+        # Apply the shared generic-title enrichment
+        titel = enrich_generic_title(titel, cluster.kategorie, cluster.beschreibung)
 
-        # If title is too short (< 20 chars / < 3 words), try to enrich it
-        words = titel.split()
-        if len(words) < 3 or len(titel) < 20:
-            # Use beschreibung to build a better title if available
-            if cluster.beschreibung and len(cluster.beschreibung) > 20:
-                # Extract first meaningful phrase from beschreibung
-                first_sentence = cluster.beschreibung.split(".")[0].strip()
-                if len(first_sentence) > len(titel) and len(first_sentence) <= 80:
-                    titel = first_sentence
-                else:
-                    # Prefix with category context
-                    titel = f"{titel} — {cluster.kategorie}" if cluster.kategorie else titel
+        # Normalize user-facing text (strip English boilerplate etc.)
+        titel = normalize_user_facing_text(titel)
 
         # Cap at 100 chars
         if len(titel) > 100:
             titel = titel[:97] + "..."
 
         cluster.titel = titel
+
+        # Also normalize beschreibung
+        cluster.beschreibung = normalize_user_facing_text(cluster.beschreibung)
 
     return clusters
 
