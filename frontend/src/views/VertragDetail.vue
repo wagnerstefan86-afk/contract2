@@ -402,8 +402,19 @@ import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, Cl
 const route = useRoute();
 const vertrag = ref<Vertrag | null>(null);
 const analysen = ref<Analyse[]>([]);
-const fundstellen = ref<Fundstelle[]>([]);
 const gruppiertesErgebnis = ref<GruppiertesErgebnis | null>(null);
+
+// Derive flat list from grouped data — same final-selected layer as grouped view
+const fundstellen = computed<Fundstelle[]>(() => {
+  if (!gruppiertesErgebnis.value) return [];
+  const all: Fundstelle[] = [];
+  for (const gruppe of gruppiertesErgebnis.value.gruppen) {
+    for (const f of gruppe.fundstellen) {
+      all.push(f as Fundstelle);
+    }
+  }
+  return all;
+});
 const risikothemen = ref<RisikoThema[]>([]);
 const clusteringDebug = ref<ClusteringDebug | null>(null);
 const finalEditorial = ref<FinalEditorialResult | null>(null);
@@ -441,16 +452,14 @@ function toggleGruppe(gruppeId: string) {
 
 async function laden() {
   const id = route.params.id;
-  const [vRes, aRes, fRes, gRes, tRes] = await Promise.all([
+  const [vRes, aRes, gRes, tRes] = await Promise.all([
     api.get(`/vertraege/${id}`),
     api.get(`/analysen/vertrag/${id}`),
-    api.get(`/fundstellen/vertrag/${id}`),
     api.get(`/fundstellen/vertrag/${id}/gruppiert`).catch(() => ({ data: null })),
     api.get(`/risikothemen/vertrag/${id}`).catch(() => ({ data: [] })),
   ]);
   vertrag.value = vRes.data;
   analysen.value = aRes.data;
-  fundstellen.value = fRes.data;
   if (gRes.data) {
     gruppiertesErgebnis.value = gRes.data;
   }

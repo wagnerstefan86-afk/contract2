@@ -90,15 +90,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
 import type { Fundstelle, GruppiertesErgebnis } from "../types";
 
-const fundstellen = ref<Fundstelle[]>([]);
 const gruppiertesErgebnis = ref<GruppiertesErgebnis | null>(null);
 const ansicht = ref<"gruppiert" | "flat">("gruppiert");
 const offeneGruppen = ref<Set<string>>(new Set());
+
+// Derive flat list from grouped data so both tabs use the same final-selected layer
+const fundstellen = computed<Fundstelle[]>(() => {
+  if (!gruppiertesErgebnis.value) return [];
+  const all: Fundstelle[] = [];
+  for (const gruppe of gruppiertesErgebnis.value.gruppen) {
+    for (const f of gruppe.fundstellen) {
+      all.push(f as Fundstelle);
+    }
+  }
+  return all;
+});
 
 function risikoFarbe(risiko: string): string {
   switch (risiko) {
@@ -120,13 +131,11 @@ function toggleGruppe(gruppeId: string) {
 }
 
 onMounted(async () => {
-  const [flatRes, groupRes] = await Promise.all([
-    api.get("/fundstellen/offen"),
-    api.get("/fundstellen/offen/gruppiert").catch(() => ({ data: null })),
-  ]);
-  fundstellen.value = flatRes.data;
-  if (groupRes.data) {
+  try {
+    const groupRes = await api.get("/fundstellen/offen/gruppiert");
     gruppiertesErgebnis.value = groupRes.data;
+  } catch {
+    gruppiertesErgebnis.value = null;
   }
 });
 </script>
