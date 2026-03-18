@@ -46,8 +46,14 @@ def _fundstelle_to_dict(f: Fundstelle) -> dict:
 
 @router.get("/vertrag/{vertrag_id}", response_model=list[FundstelleResponse])
 async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    analyse_ids = await _latest_analyse_ids(db, vertrag_id=vertrag_id)
+    if not analyse_ids:
+        return []
     result = await db.execute(
-        select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
+        select(Fundstelle)
+        .where(Fundstelle.vertrag_id == vertrag_id)
+        .where(Fundstelle.analyse_id.in_(analyse_ids))
+        .order_by(Fundstelle.erstellt_am.desc())
     )
     return result.scalars().all()
 
@@ -180,9 +186,11 @@ async def fundstellen_gruppiert(vertrag_id: uuid.UUID, user: Benutzer = Depends(
     if themen:
         return _themen_to_gruppen(themen, only_open=False)
     # Fallback: no themes exist yet (analysis not complete)
-    result = await db.execute(
-        select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
-    )
+    analyse_ids = await _latest_analyse_ids(db, vertrag_id=vertrag_id)
+    q = select(Fundstelle).where(Fundstelle.vertrag_id == vertrag_id).order_by(Fundstelle.erstellt_am.desc())
+    if analyse_ids:
+        q = q.where(Fundstelle.analyse_id.in_(analyse_ids))
+    result = await db.execute(q)
     rows = result.scalars().all()
     return {
         "gruppen": [{
@@ -203,8 +211,14 @@ async def fundstellen_gruppiert(vertrag_id: uuid.UUID, user: Benutzer = Depends(
 
 @router.get("/offen", response_model=list[FundstelleResponse])
 async def offene_fundstellen(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    analyse_ids = await _latest_analyse_ids(db)
+    if not analyse_ids:
+        return []
     result = await db.execute(
-        select(Fundstelle).where(Fundstelle.pruef_status == "Offen").order_by(Fundstelle.erstellt_am.desc())
+        select(Fundstelle)
+        .where(Fundstelle.pruef_status == "Offen")
+        .where(Fundstelle.analyse_id.in_(analyse_ids))
+        .order_by(Fundstelle.erstellt_am.desc())
     )
     return result.scalars().all()
 
