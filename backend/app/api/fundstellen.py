@@ -10,7 +10,7 @@ from app.auth import get_current_user
 from app.models.benutzer import Benutzer
 from app.models.analyse import Analyse
 from app.models.fundstelle import Fundstelle
-from app.models.risikothema import RisikoThema
+from app.models.risikothema import RisikoThema, risikothema_fundstellen
 from app.schemas.fundstelle import FundstelleResponse, FundstelleUpdate
 from app.api.risikothemen import _build_evidences
 
@@ -46,13 +46,12 @@ def _fundstelle_to_dict(f: Fundstelle) -> dict:
 
 @router.get("/vertrag/{vertrag_id}", response_model=list[FundstelleResponse])
 async def fundstellen_fuer_vertrag(vertrag_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    analyse_ids = await _latest_analyse_ids(db, vertrag_id=vertrag_id)
-    if not analyse_ids:
+    fs_ids = await _final_fundstelle_ids(db, vertrag_id=vertrag_id)
+    if not fs_ids:
         return []
     result = await db.execute(
         select(Fundstelle)
-        .where(Fundstelle.vertrag_id == vertrag_id)
-        .where(Fundstelle.analyse_id.in_(analyse_ids))
+        .where(Fundstelle.id.in_(fs_ids))
         .order_by(Fundstelle.erstellt_am.desc())
     )
     return result.scalars().all()
@@ -153,6 +152,31 @@ async def _latest_analyse_ids(db: AsyncSession,
     return [row[0] for row in result.all()]
 
 
+async def _final_fundstelle_ids(db: AsyncSession,
+                                vertrag_id: uuid.UUID | None = None) -> list[uuid.UUID]:
+    """Return Fundstelle IDs that belong to final-selected RisikoThema
+    from the latest analysis per contract.
+
+    This is the single source of truth for which raw findings are
+    'user-relevant' — only those linked to editorial-surviving themes.
+    """
+    analyse_ids = await _latest_analyse_ids(db, vertrag_id=vertrag_id)
+    if not analyse_ids:
+        return []
+
+    q = (
+        select(risikothema_fundstellen.c.fundstelle_id)
+        .join(RisikoThema, RisikoThema.id == risikothema_fundstellen.c.risikothema_id)
+        .where(RisikoThema.analyse_id.in_(analyse_ids))
+        .where(RisikoThema.final_selected.is_(True))
+    )
+    if vertrag_id:
+        q = q.where(RisikoThema.vertrag_id == vertrag_id)
+
+    result = await db.execute(q)
+    return list({row[0] for row in result.all()})
+
+
 async def _load_final_themen(db: AsyncSession,
                              vertrag_id: uuid.UUID | None = None) -> list[RisikoThema]:
     """Load final-selected themes from the latest analysis per contract.
@@ -211,13 +235,13 @@ async def fundstellen_gruppiert(vertrag_id: uuid.UUID, user: Benutzer = Depends(
 
 @router.get("/offen", response_model=list[FundstelleResponse])
 async def offene_fundstellen(user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    analyse_ids = await _latest_analyse_ids(db)
-    if not analyse_ids:
+    fs_ids = await _final_fundstelle_ids(db)
+    if not fs_ids:
         return []
     result = await db.execute(
         select(Fundstelle)
         .where(Fundstelle.pruef_status == "Offen")
-        .where(Fundstelle.analyse_id.in_(analyse_ids))
+        .where(Fundstelle.id.in_(fs_ids))
         .order_by(Fundstelle.erstellt_am.desc())
     )
     return result.scalars().all()
