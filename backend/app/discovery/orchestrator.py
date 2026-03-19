@@ -475,9 +475,31 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             for raw_idx in cf.source_raw_indices:
                 raw_index_to_fundstelle.setdefault(raw_idx, []).append(fs)
 
+        # Build deterministic mapping: source_fingerprint → Fundstelle objects.
+        # Uses the canonical fingerprint from textstelle + absatz_ids, computed
+        # identically to RawFinding.source_fingerprint (same hash function).
+        from app.discovery.passes.base import build_source_fingerprint
+        fingerprint_to_fundstelle: dict[str, list] = {}
+        for fs in persisted_fundstellen:
+            fp = build_source_fingerprint(fs.textstelle, fs.absatz_ids)
+            fingerprint_to_fundstelle.setdefault(fp, []).append(fs)
+
+        # Enrich TopicEvidenceRef.source_fingerprint from raw finding data.
+        # This attaches the fingerprint BEFORE resolution, as pre-existing
+        # provenance metadata — not as a post-hoc decoration.
+        for cluster in topic_clusters:
+            for ref in cluster.evidence_refs:
+                if ref.source_fingerprint:
+                    continue  # Already populated
+                if ref.source_raw_index is not None and ref.source_raw_index < len(all_raw_findings):
+                    raw = all_raw_findings[ref.source_raw_index]
+                    if raw.source_fingerprint:
+                        ref.source_fingerprint = raw.source_fingerprint
+
         resolved, linkage_stats = resolve_topic_fundstellen(
             topic_clusters, persisted_fundstellen,
             raw_index_to_fundstelle=raw_index_to_fundstelle,
+            fingerprint_to_fundstelle=fingerprint_to_fundstelle,
         )
 
         junction_rows = []
@@ -522,8 +544,9 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         await _log(db, aid, vid,
                    f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
                    f"Linkage: {linkage_stats.direct_index_matches} by index, "
-                   f"{linkage_stats.exact_title_matches} by exact title, "
-                   f"{linkage_stats.unresolved_evidences} unresolved.",
+                   f"{linkage_stats.source_fingerprint_matches} by fingerprint, "
+                   f"{linkage_stats.exact_title_fallback_matches} by title fallback, "
+                   f"{linkage_stats.unresolved_references} unresolved.",
                    details=metriken)
 
     # --- Step 7: Final Editorial Pass ---

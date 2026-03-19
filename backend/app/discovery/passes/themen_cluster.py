@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from app.discovery.llm_client import LLMConfig, llm_json_completion
-from app.discovery.passes.base import RawFinding, is_generic_title, enrich_generic_title, normalize_user_facing_text
+from app.discovery.passes.base import (
+    RawFinding, is_generic_title, enrich_generic_title, normalize_user_facing_text,
+    build_source_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,15 +114,23 @@ class TopicEvidenceRef:
     """Structured reference from a topic to a raw finding.
 
     Replaces the fragile parallel-list model (evidence_titles + evidence_indices).
-    Each ref carries both identifiers so they cannot go out of sync.
+    Each ref carries all relevant identifiers so they cannot go out of sync.
+
+    Resolution priority during linkage:
+    1. source_raw_index → raw_index_to_fundstelle (direct provenance)
+    2. source_fingerprint → fingerprint_to_fundstelle (deterministic hash match)
+    3. source_title → kurzbeschreibung equality (transitional fallback, to be removed)
     """
     # 1-based finding number from the LLM input list (maps to all_raw_findings)
     finding_nr: int | None = None
-    # Original kurzbeschreibung title as returned by the LLM
+    # Original kurzbeschreibung title as returned by the LLM (transitional fallback only)
     source_title: str | None = None
     # 0-based index into the raw findings list (= finding_nr - 1 when present)
     source_raw_index: int | None = None
-    # Deterministic hash of textstelle[:200] + segment_ids (filled during resolution)
+    # Deterministic hash of textstelle[:200] + segment_ids.
+    # Populated BEFORE resolution by the orchestrator from the raw finding's
+    # pre-computed fingerprint. Used as Strategy 2 during linkage resolution.
+    # See base.build_source_fingerprint() for hash construction details.
     source_fingerprint: str | None = None
 
 
@@ -575,58 +586,87 @@ def _parse_clusters(items: list[dict]) -> list[TopicCluster] | None:
 
 @dataclass
 class LinkageStats:
-    """Debug statistics for evidence-to-Fundstelle resolution."""
+    """Debug statistics for evidence-to-Fundstelle resolution.
+
+    Metrics reflect the actual resolution strategy used for each evidence ref:
+    - direct_index_matches: resolved via raw finding index provenance (best)
+    - source_fingerprint_matches: resolved via deterministic source hash (good)
+    - exact_title_fallback_matches: resolved via kurzbeschreibung equality
+      (transitional — to be removed once fingerprint coverage is complete)
+    - ambiguous_fingerprints: fingerprint matched multiple Fundstelle candidates
+    - unresolved_references: could not resolve by any strategy
+    - duplicate_reference_collisions: target Fundstelle already assigned to another topic
+    - fingerprint_collisions: number of fingerprints mapping to >1 Fundstelle
+    - total_references: total evidence refs processed
+    """
     direct_index_matches: int = 0
-    exact_title_matches: int = 0
-    unresolved_evidences: int = 0
-    duplicate_references: int = 0
-    total_evidences: int = 0
+    source_fingerprint_matches: int = 0
+    exact_title_fallback_matches: int = 0
+    ambiguous_fingerprints: int = 0
+    unresolved_references: int = 0
+    duplicate_reference_collisions: int = 0
+    fingerprint_collisions: int = 0
+    total_references: int = 0
 
     def to_dict(self) -> dict:
         return {
             "direct_index_matches": self.direct_index_matches,
-            "exact_title_matches": self.exact_title_matches,
-            "unresolved_evidences": self.unresolved_evidences,
-            "duplicate_references": self.duplicate_references,
-            "total_evidences": self.total_evidences,
+            "source_fingerprint_matches": self.source_fingerprint_matches,
+            "exact_title_fallback_matches": self.exact_title_fallback_matches,
+            "ambiguous_fingerprints": self.ambiguous_fingerprints,
+            "unresolved_references": self.unresolved_references,
+            "duplicate_reference_collisions": self.duplicate_reference_collisions,
+            "fingerprint_collisions": self.fingerprint_collisions,
+            "total_references": self.total_references,
         }
 
 
 def _build_fingerprint(textstelle: str, segment_ids: list[str] | list | None) -> str:
-    """Build a deterministic fingerprint from original contract text and location.
+    """Delegate to the canonical build_source_fingerprint in base.py.
 
-    Uses first 200 chars of textstelle (normalized) + sorted segment IDs.
-    This survives consolidation because textstelle is immutable original text.
+    Kept as a thin wrapper for backward compatibility with existing callers.
+    See base.build_source_fingerprint for full documentation.
     """
-    import hashlib
-    text_norm = (textstelle or "")[:200].lower().strip()
-    segs = ",".join(sorted(str(s) for s in (segment_ids or [])))
-    raw = f"{text_norm}|{segs}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return build_source_fingerprint(textstelle, segment_ids)
 
 
 def resolve_topic_fundstellen(
     clusters: list[TopicCluster],
     fundstellen: list,
     raw_index_to_fundstelle: dict[int, list] | None = None,
+    fingerprint_to_fundstelle: dict[str, list] | None = None,
 ) -> tuple[list[tuple[TopicCluster, list]], LinkageStats]:
     """Resolve topic evidence to persisted Fundstelle objects using deterministic linkage.
 
     Resolution order (no fuzzy matching):
-    1. Direct index lookup via TopicEvidenceRef.source_raw_index → raw_index_to_fundstelle
-    2. Exact title match via TopicEvidenceRef.source_title == Fundstelle.kurzbeschreibung
+    1. Direct index lookup via source_raw_index → raw_index_to_fundstelle
+    2. Source fingerprint lookup via source_fingerprint → fingerprint_to_fundstelle
+    3. Exact title equality as transitional last-resort fallback (to be removed)
+
+    Ambiguity handling:
+    - If a fingerprint maps to multiple Fundstelle, the match is counted as
+      ambiguous and NOT auto-linked. This prevents silent mis-linkage.
+    - Duplicate assignment (same Fundstelle to two topics) is prevented.
 
     Args:
         clusters: TopicCluster objects from clustering LLM
         fundstellen: Persisted Fundstelle objects (with database IDs)
         raw_index_to_fundstelle: Mapping from 0-based raw finding index to
-            list of Fundstelle objects that were created from that raw finding
-            (through consolidation). Built by the orchestrator.
+            list of Fundstelle objects (through consolidation). Built by orchestrator.
+        fingerprint_to_fundstelle: Mapping from source fingerprint to list of
+            Fundstelle objects sharing that fingerprint. Built by orchestrator.
 
     Returns:
         Tuple of (resolved pairs, linkage statistics)
     """
     stats = LinkageStats()
+
+    # Count fingerprint collisions for telemetry
+    if fingerprint_to_fundstelle:
+        stats.fingerprint_collisions = sum(
+            1 for candidates in fingerprint_to_fundstelle.values()
+            if len(candidates) > 1
+        )
 
     # Track which Fundstelle are already assigned (prevent duplicates across topics)
     assigned_fs_ids: set = set()
@@ -634,22 +674,41 @@ def resolve_topic_fundstellen(
 
     for ci, cluster in enumerate(clusters):
         for ref in cluster.evidence_refs:
-            stats.total_evidences += 1
+            stats.total_references += 1
             resolved_fs = None
 
-            # --- Strategy 1: Direct index lookup ---
+            # --- Strategy 1: Direct index lookup (best — provenance-based) ---
             if raw_index_to_fundstelle is not None and ref.source_raw_index is not None:
                 candidates = raw_index_to_fundstelle.get(ref.source_raw_index, [])
                 for fs in candidates:
                     if fs.id not in assigned_fs_ids:
                         resolved_fs = fs
                         stats.direct_index_matches += 1
-                        # Fill fingerprint on successful resolution
-                        ref.source_fingerprint = _build_fingerprint(
-                            fs.textstelle, fs.absatz_ids)
                         break
 
-            # --- Strategy 2: Exact title match (deterministic, no fuzzy) ---
+            # --- Strategy 2: Source fingerprint lookup (deterministic hash) ---
+            if resolved_fs is None and ref.source_fingerprint and fingerprint_to_fundstelle:
+                fp_candidates = fingerprint_to_fundstelle.get(ref.source_fingerprint, [])
+                # Filter to unassigned candidates
+                available = [fs for fs in fp_candidates if fs.id not in assigned_fs_ids]
+                if len(available) == 1:
+                    # Unambiguous match
+                    resolved_fs = available[0]
+                    stats.source_fingerprint_matches += 1
+                elif len(available) > 1:
+                    # Ambiguous: multiple Fundstelle share this fingerprint.
+                    # Do NOT auto-link — count as ambiguous and fall through.
+                    stats.ambiguous_fingerprints += 1
+                    logger.warning(
+                        f"Topic '{cluster.titel}': fingerprint {ref.source_fingerprint} "
+                        f"matches {len(available)} Fundstelle — ambiguous, skipping fingerprint strategy"
+                    )
+
+            # --- Strategy 3: Exact title equality (transitional fallback) ---
+            # WARNING: This uses LLM-generated kurzbeschreibung for matching.
+            # It is NOT a robust identity mechanism and exists only as a
+            # transitional fallback until fingerprint coverage is complete.
+            # To remove: delete this block once all evidence refs carry fingerprints.
             if resolved_fs is None and ref.source_title:
                 title_norm = ref.source_title.lower().strip()
                 for fs in fundstellen:
@@ -657,24 +716,26 @@ def resolve_topic_fundstellen(
                         continue
                     if fs.kurzbeschreibung.lower().strip() == title_norm:
                         resolved_fs = fs
-                        stats.exact_title_matches += 1
-                        ref.source_fingerprint = _build_fingerprint(
-                            fs.textstelle, fs.absatz_ids)
+                        stats.exact_title_fallback_matches += 1
+                        logger.debug(
+                            f"Topic '{cluster.titel}': Evidence resolved via title fallback "
+                            f"(transitional): '{ref.source_title[:60]}'"
+                        )
                         break
 
             # --- No match found ---
             if resolved_fs is None:
-                stats.unresolved_evidences += 1
+                stats.unresolved_references += 1
                 label = ref.source_title[:60] if ref.source_title else f"nr={ref.finding_nr}"
                 logger.warning(
                     f"Topic '{cluster.titel}': Evidence '{label}' "
-                    f"konnte nicht aufgelöst werden (kein Index-Match, kein exakter Titel-Match)"
+                    f"konnte nicht aufgelöst werden (kein Index-, Fingerprint- oder Titel-Match)"
                 )
                 continue
 
             # Check for duplicate assignment
             if resolved_fs.id in assigned_fs_ids:
-                stats.duplicate_references += 1
+                stats.duplicate_reference_collisions += 1
                 logger.debug(
                     f"Topic '{cluster.titel}': Fundstelle {resolved_fs.id} "
                     f"bereits einem anderen Thema zugeordnet"
@@ -690,10 +751,12 @@ def resolve_topic_fundstellen(
 
     logger.info(
         f"Evidence linkage: {stats.direct_index_matches} by index, "
-        f"{stats.exact_title_matches} by exact title, "
-        f"{stats.unresolved_evidences} unresolved, "
-        f"{stats.duplicate_references} duplicates "
-        f"(total: {stats.total_evidences})"
+        f"{stats.source_fingerprint_matches} by fingerprint, "
+        f"{stats.exact_title_fallback_matches} by title fallback, "
+        f"{stats.ambiguous_fingerprints} ambiguous FP, "
+        f"{stats.unresolved_references} unresolved, "
+        f"{stats.duplicate_reference_collisions} duplicates "
+        f"(total: {stats.total_references})"
     )
     return result, stats
 

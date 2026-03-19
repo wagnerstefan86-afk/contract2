@@ -2,11 +2,39 @@
 
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from app.discovery.chunking import Segment
 from app.discovery.llm_client import LLMConfig
+
+
+def build_source_fingerprint(textstelle: str, segment_ids: list[str] | list | None) -> str:
+    """Build a deterministic fingerprint from original contract text and document location.
+
+    Inputs (non-LLM-derived source data only):
+    - textstelle: first 200 chars, lowercased, stripped — the verbatim contract excerpt
+    - segment_ids: sorted, joined — the document-structural location
+
+    Guarantees:
+    - Deterministic: same inputs always produce the same hash
+    - Reproducible: can be recomputed at any pipeline stage from the same source fields
+    - Stable across consolidation: textstelle and segment_ids are preserved unchanged
+      from RawFinding through ConsolidatedFinding to Fundstelle
+    - Independent of LLM wording: no kurzbeschreibung, titel, or erklaerung is used
+
+    Does NOT guarantee:
+    - Uniqueness: two distinct findings from the same paragraph with the same text
+      prefix will collide. This is handled explicitly by the resolution layer.
+    - Cross-document identity: fingerprints are only meaningful within a single analysis.
+
+    Returns a 16-character hex string (first 64 bits of SHA-256).
+    """
+    text_norm = (textstelle or "")[:200].lower().strip()
+    segs = ",".join(sorted(str(s) for s in (segment_ids or [])))
+    raw = f"{text_norm}|{segs}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -30,6 +58,9 @@ class RawFinding:
     scope_text: str = ""             # Full paragraph text
     trigger_spans: list[str] = field(default_factory=list)  # Key phrases
     evidence_heading_path: str = ""  # Section heading breadcrumb
+    # Deterministic source fingerprint: hash of textstelle[:200] + segment_ids.
+    # Computed at creation time in _parse_findings(). Survives consolidation.
+    source_fingerprint: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -426,8 +457,9 @@ class DiscoveryPass(ABC):
                 raw_severity = str(item.get("severity", "") or item.get("risikostufe", "Niedrig"))
                 risikostufe = normalize_severity(raw_severity)
 
+                truncated_text = textstelle[:2000]
                 findings.append(RawFinding(
-                    textstelle=textstelle[:2000],
+                    textstelle=truncated_text,
                     kategorie=kategorie,
                     kurzbeschreibung=kurzbeschreibung,
                     erklaerung=erklaerung,
@@ -443,6 +475,7 @@ class DiscoveryPass(ABC):
                     scope_text=scope_text,
                     trigger_spans=trigger_spans,
                     evidence_heading_path=str(item.get("evidence_heading_path", "")),
+                    source_fingerprint=build_source_fingerprint(truncated_text, segment_ids),
                 ))
             except Exception:
                 continue

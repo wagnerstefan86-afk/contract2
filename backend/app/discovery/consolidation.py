@@ -32,6 +32,10 @@ class ConsolidatedFinding:
     # merged into this consolidated finding. Used for deterministic
     # evidence linkage from TopicCluster.evidence_refs.
     source_raw_indices: list[int] = field(default_factory=list)
+    # Deterministic source fingerprints from all merged RawFindings.
+    # Preserves full provenance: if 3 raw findings were merged, all 3
+    # fingerprints are retained. Used for fingerprint-based linkage resolution.
+    source_fingerprints: list[str] = field(default_factory=list)
 
     def merge_info(self) -> dict:
         """Return a serializable summary of the merge provenance."""
@@ -75,6 +79,8 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
                     # Same text + similar description = duplicate. Merge.
                     _merge_into(existing, candidate, text_sim, desc_sim)
                     existing.source_raw_indices.append(candidate_raw_idx)
+                    if candidate.source_fingerprint:
+                        existing.source_fingerprints.append(candidate.source_fingerprint)
                     is_duplicate = True
                     break
                 # else: different angle on same text — keep both
@@ -91,6 +97,7 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
                 }],
                 raw_count=1,
                 source_raw_indices=[candidate_raw_idx],
+                source_fingerprints=[candidate.source_fingerprint] if candidate.source_fingerprint else [],
             )
             kept.append(cf)
 
