@@ -492,16 +492,18 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         #         against known raw findings. This closes the gap where the LLM
         #         omits finding_nr but provides ursprungstitel.
         # After enrichment, refs with neither index nor fingerprint will be
-        # counted as refs_missing_provenance and remain unresolved unless
-        # the title fallback flag is enabled.
+        # counted as refs_missing_provenance and remain unresolved.
 
         # Build title→raw_index lookup for Pass 2 (kurzbeschreibung is LLM-generated
-        # but is deterministically set at RawFinding creation, not editable later)
-        title_to_raw_index: dict[str, int] = {}
+        # but is deterministically set at RawFinding creation, not editable later).
+        # We track ALL indices per title to detect ambiguity — if multiple raw
+        # findings share the same title, we must NOT enrich (arbitrary selection
+        # would violate deterministic linkage).
+        title_to_raw_indices: dict[str, list[int]] = {}
         for idx, raw in enumerate(all_raw_findings):
             key = raw.kurzbeschreibung.lower().strip()
-            if key and key not in title_to_raw_index:
-                title_to_raw_index[key] = idx
+            if key:
+                title_to_raw_indices.setdefault(key, []).append(idx)
 
         for cluster in topic_clusters:
             for ref in cluster.evidence_refs:
@@ -518,16 +520,26 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                 # This does NOT use title for linkage resolution — it uses title
                 # to recover the deterministic identifiers that the LLM failed to
                 # provide, so that resolution can proceed via Strategy 1 or 2.
+                # IMPORTANT: Only enrich when title maps to exactly one raw finding.
+                # Ambiguous titles (multiple raw findings with same kurzbeschreibung)
+                # must NOT be enriched — the ref stays unresolved.
                 if ref.source_title:
                     title_key = ref.source_title.lower().strip()
-                    raw_idx = title_to_raw_index.get(title_key)
-                    if raw_idx is not None:
+                    matching_indices = title_to_raw_indices.get(title_key, [])
+                    if len(matching_indices) == 1:
+                        raw_idx = matching_indices[0]
                         raw = all_raw_findings[raw_idx]
                         ref.source_raw_index = raw_idx
                         ref.source_fingerprint = raw.source_fingerprint
                         logger.debug(
                             f"Enrichment: recovered index={raw_idx} + fingerprint "
                             f"for ref '{ref.source_title[:50]}' via title→raw lookup"
+                        )
+                    elif len(matching_indices) > 1:
+                        logger.warning(
+                            f"Enrichment: title '{ref.source_title[:50]}' matches "
+                            f"{len(matching_indices)} raw findings — ambiguous, "
+                            f"skipping enrichment"
                         )
 
         resolved, linkage_stats = resolve_topic_fundstellen(

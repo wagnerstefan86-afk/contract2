@@ -15,6 +15,20 @@ B. Regression / structural tests
   9. Parse clusters, merge, dedup, reassign unchanged
   10. has_deterministic_provenance() helper
   11. LinkageStats includes all metrics
+
+C. Orchestrator enrichment safety
+  12. Ambiguous title recovery must NOT enrich
+  13. Unique title recovery enriches correctly
+  14. Missing provenance stays unresolved through full pipeline
+
+D. Edge cases and end-to-end
+  15. Fingerprint collision with resolution attempt
+  16. End-to-end pipeline with mixed provenance
+  17. Telemetry consistency
+
+E. No hidden fallback regression
+  18. No title-based matching in resolver
+  19. No fuzzy matching anywhere in linkage
 """
 
 from __future__ import annotations
@@ -466,3 +480,497 @@ class TestBuildFingerprintWrapper:
         fp_wrapper = _build_fingerprint("some text", ["seg1", "seg2"])
         fp_canonical = build_source_fingerprint("some text", ["seg1", "seg2"])
         assert fp_wrapper == fp_canonical
+
+
+# =============================================================================
+# C. ORCHESTRATOR ENRICHMENT SAFETY
+# =============================================================================
+
+def _simulate_enrichment(all_raw_findings, topic_clusters):
+    """Simulate the orchestrator's two-pass enrichment logic.
+
+    Reproduces the exact enrichment code from orchestrator._run_pipeline
+    (Step 6b pre-resolution enrichment) so we can test it in isolation
+    without running the full async pipeline.
+    """
+    # Build title→raw_indices lookup (same as orchestrator)
+    title_to_raw_indices: dict[str, list[int]] = {}
+    for idx, raw in enumerate(all_raw_findings):
+        key = raw.kurzbeschreibung.lower().strip()
+        if key:
+            title_to_raw_indices.setdefault(key, []).append(idx)
+
+    for cluster in topic_clusters:
+        for ref in cluster.evidence_refs:
+            # Pass 1: Direct index → fingerprint
+            if ref.source_fingerprint:
+                continue
+            if ref.source_raw_index is not None and ref.source_raw_index < len(all_raw_findings):
+                raw = all_raw_findings[ref.source_raw_index]
+                if raw.source_fingerprint:
+                    ref.source_fingerprint = raw.source_fingerprint
+                continue
+
+            # Pass 2: Recover from title (only if unambiguous)
+            if ref.source_title:
+                title_key = ref.source_title.lower().strip()
+                matching_indices = title_to_raw_indices.get(title_key, [])
+                if len(matching_indices) == 1:
+                    raw_idx = matching_indices[0]
+                    raw = all_raw_findings[raw_idx]
+                    ref.source_raw_index = raw_idx
+                    ref.source_fingerprint = raw.source_fingerprint
+
+
+class TestOrchestratorEnrichmentAmbiguity:
+    """Task 2: Ambiguous title recovery must NOT enrich or link."""
+
+    def test_ambiguous_title_no_enrichment(self):
+        """Two RawFindings with identical kurzbeschreibung → no enrichment."""
+        raw_a = _make_raw_finding(
+            "Klausel über Haftung.", ["seg1"],
+            kurzbeschreibung="Unbeschränkte Haftung",
+        )
+        raw_b = _make_raw_finding(
+            "Andere Klausel über Haftung.", ["seg2"],
+            kurzbeschreibung="Unbeschränkte Haftung",
+        )
+        all_raw = [raw_a, raw_b]
+
+        # Ref has only source_title (LLM omitted finding_nr)
+        ref = TopicEvidenceRef(source_title="Unbeschränkte Haftung")
+        cluster = _make_cluster("Haftungsthema", [ref])
+
+        _simulate_enrichment(all_raw, [cluster])
+
+        # Enrichment must NOT have assigned provenance
+        assert ref.source_raw_index is None
+        assert ref.source_fingerprint is None
+        assert ref.has_deterministic_provenance() is False
+
+    def test_ambiguous_title_stays_unresolved_in_resolver(self):
+        """After failed enrichment, resolver must leave ref unresolved."""
+        raw_a = _make_raw_finding(
+            "Klausel A.", ["seg1"], kurzbeschreibung="Shared Title",
+        )
+        raw_b = _make_raw_finding(
+            "Klausel B.", ["seg2"], kurzbeschreibung="Shared Title",
+        )
+        all_raw = [raw_a, raw_b]
+
+        ref = TopicEvidenceRef(source_title="Shared Title")
+        cluster = _make_cluster("Topic", [ref])
+
+        # Enrichment step
+        _simulate_enrichment(all_raw, [cluster])
+
+        # Build fundstellen for resolution
+        fs_a = _make_fundstelle("Shared Title", textstelle="Klausel A.", absatz_ids=["seg1"])
+        fs_b = _make_fundstelle("Shared Title", textstelle="Klausel B.", absatz_ids=["seg2"])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs_a, fs_b],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.unresolved_references == 1
+        assert stats.refs_missing_provenance == 1
+
+    def test_unique_title_enriches_correctly(self):
+        """Single matching RawFinding → enrichment proceeds."""
+        raw = _make_raw_finding(
+            "Einzigartige Klausel.", ["seg1"],
+            kurzbeschreibung="Unique Finding Title",
+        )
+        all_raw = [raw]
+
+        ref = TopicEvidenceRef(source_title="Unique Finding Title")
+        cluster = _make_cluster("Topic", [ref])
+
+        _simulate_enrichment(all_raw, [cluster])
+
+        assert ref.source_raw_index == 0
+        assert ref.source_fingerprint == raw.source_fingerprint
+        assert ref.has_deterministic_provenance() is True
+
+    def test_case_insensitive_ambiguity_detection(self):
+        """Title comparison is case-insensitive for ambiguity."""
+        raw_a = _make_raw_finding("Text A.", ["seg1"], kurzbeschreibung="Haftung")
+        raw_b = _make_raw_finding("Text B.", ["seg2"], kurzbeschreibung="haftung")
+        all_raw = [raw_a, raw_b]
+
+        ref = TopicEvidenceRef(source_title="HAFTUNG")
+        cluster = _make_cluster("Topic", [ref])
+
+        _simulate_enrichment(all_raw, [cluster])
+
+        # Case-insensitive matching means both match → ambiguous → no enrichment
+        assert ref.source_raw_index is None
+        assert ref.source_fingerprint is None
+
+
+# =============================================================================
+# D. EDGE CASES AND END-TO-END
+# =============================================================================
+
+class TestMissingProvenanceStaysUnresolved:
+    """Task 3: Refs with no provenance and no valid enrichment remain unresolved."""
+
+    def test_no_index_no_fingerprint_no_title(self):
+        """Completely empty ref → unresolved, no crash."""
+        ref = TopicEvidenceRef()
+        cluster = _make_cluster("Topic", [ref])
+
+        _simulate_enrichment([], [cluster])
+
+        assert ref.source_raw_index is None
+        assert ref.source_fingerprint is None
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [_make_fundstelle("Anything")],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+        assert stats.unresolved_references == 1
+        assert stats.refs_missing_provenance == 1
+
+    def test_title_only_no_matching_raw(self):
+        """Title that doesn't match any raw finding → no enrichment → unresolved."""
+        raw = _make_raw_finding("Some text.", ["seg1"], kurzbeschreibung="Different Title")
+        ref = TopicEvidenceRef(source_title="No Match")
+        cluster = _make_cluster("Topic", [ref])
+
+        _simulate_enrichment([raw], [cluster])
+
+        assert ref.source_raw_index is None
+        assert ref.source_fingerprint is None
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [_make_fundstelle("No Match")],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+        assert stats.unresolved_references == 1
+        assert stats.refs_missing_provenance == 1
+
+
+class TestFingerprintCollisionSafety:
+    """Task 4: Fingerprint collisions are handled safely."""
+
+    def test_forced_collision_not_auto_linked(self):
+        """Two Fundstellen with same fingerprint → ambiguous → no link."""
+        # Force identical fingerprint by using identical textstelle + absatz_ids
+        text = "Identische Vertragsklausel über Haftung."
+        fp = build_source_fingerprint(text, ["seg1"])
+
+        fs_a = _make_fundstelle("A", textstelle=text, absatz_ids=["seg1"])
+        fs_b = _make_fundstelle("B", textstelle=text, absatz_ids=["seg1"])
+
+        ref = TopicEvidenceRef(source_fingerprint=fp)
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs_a, fs_b],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={fp: [fs_a, fs_b]},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.ambiguous_fingerprints == 1
+        assert stats.source_fingerprint_matches == 0
+        assert stats.unresolved_references == 1
+        assert stats.fingerprint_collisions == 1
+
+    def test_collision_does_not_affect_unique_fingerprints(self):
+        """A collision on one fingerprint doesn't block resolution of another."""
+        text_collision = "Shared clause text."
+        fp_collision = build_source_fingerprint(text_collision, ["seg1"])
+        text_unique = "Unique clause text."
+        fp_unique = build_source_fingerprint(text_unique, ["seg2"])
+
+        fs_a = _make_fundstelle("A", textstelle=text_collision, absatz_ids=["seg1"])
+        fs_b = _make_fundstelle("B", textstelle=text_collision, absatz_ids=["seg1"])
+        fs_c = _make_fundstelle("C", textstelle=text_unique, absatz_ids=["seg2"])
+
+        ref_ambiguous = TopicEvidenceRef(source_fingerprint=fp_collision)
+        ref_unique = TopicEvidenceRef(source_fingerprint=fp_unique)
+        cluster = _make_cluster("Topic", [ref_ambiguous, ref_unique])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs_a, fs_b, fs_c],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={
+                fp_collision: [fs_a, fs_b],
+                fp_unique: [fs_c],
+            },
+        )
+
+        assert len(result[0][1]) == 1  # Only the unique one links
+        assert stats.ambiguous_fingerprints == 1
+        assert stats.source_fingerprint_matches == 1
+        assert stats.unresolved_references == 1
+
+
+class TestEndToEndPipeline:
+    """Task 5: End-to-end pipeline test with realistic mixed provenance."""
+
+    def test_mixed_provenance_pipeline(self):
+        """Simulate a realistic pipeline with 8 raw findings and mixed provenance."""
+        # --- Create 8 RawFindings with varied characteristics ---
+        raws = [
+            _make_raw_finding("Haftung unbeschränkt.", ["seg1"], kurzbeschreibung="Unbeschränkte Haftung"),
+            _make_raw_finding("Audit-Rechte ohne Vorankündigung.", ["seg2"], kurzbeschreibung="Audit-Rechte"),
+            _make_raw_finding("SLA-Rahmen unklar.", ["seg3"], kurzbeschreibung="Unklare SLAs"),
+            _make_raw_finding("Exit-Klausel fehlt.", ["seg4"], kurzbeschreibung="Fehlende Exit-Regelung"),
+            _make_raw_finding("Subunternehmer unbegrenzt.", ["seg5"], kurzbeschreibung="Subunternehmer"),
+            _make_raw_finding("Datenschutz ungeregelt.", ["seg6"], kurzbeschreibung="Datenschutz"),
+            _make_raw_finding("Weisungsrecht einseitig.", ["seg7"], kurzbeschreibung="Weisungsrecht"),
+            _make_raw_finding("Compliance ohne Kosten.", ["seg8"], kurzbeschreibung="Compliance"),
+        ]
+
+        # Build Fundstellen (one per raw, as if consolidation was 1:1)
+        fundstellen = []
+        raw_index_to_fs: dict[int, list] = {}
+        fp_to_fs: dict[str, list] = {}
+        for i, raw in enumerate(raws):
+            fs = _make_fundstelle(
+                raw.kurzbeschreibung,
+                textstelle=raw.textstelle,
+                absatz_ids=raw.segment_ids,
+            )
+            fundstellen.append(fs)
+            raw_index_to_fs[i] = [fs]
+            fp = build_source_fingerprint(raw.textstelle, raw.segment_ids)
+            fp_to_fs.setdefault(fp, []).append(fs)
+
+        # --- Build topic clusters with mixed provenance ---
+        clusters = [
+            # Topic 1: two refs with valid index provenance
+            _make_cluster("Haftungsrisiken", [
+                _make_ref(1, "Unbeschränkte Haftung"),  # index=0
+                _make_ref(5, "Subunternehmer"),          # index=4
+            ], risikostufe="Hoch"),
+
+            # Topic 2: one ref with fingerprint only, one with index
+            _make_cluster("Operative Risiken", [
+                TopicEvidenceRef(
+                    source_fingerprint=build_source_fingerprint(
+                        "Audit-Rechte ohne Vorankündigung.", ["seg2"]
+                    ),
+                ),  # fingerprint only
+                _make_ref(3, "Unklare SLAs"),  # index=2
+            ], risikostufe="Mittel"),
+
+            # Topic 3: ref with title only (unique → enrichment should work)
+            _make_cluster("Exit-Risiken", [
+                TopicEvidenceRef(source_title="Fehlende Exit-Regelung"),
+            ], risikostufe="Hoch"),
+
+            # Topic 4: ref with no provenance at all
+            _make_cluster("Compliance-Risiken", [
+                TopicEvidenceRef(),  # completely empty → must stay unresolved
+            ], risikostufe="Niedrig"),
+        ]
+
+        # --- Run enrichment ---
+        _simulate_enrichment(raws, clusters)
+
+        # Verify enrichment results
+        # Topic 3 ref should have been enriched (unique title match)
+        assert clusters[2].evidence_refs[0].source_raw_index == 3
+        assert clusters[2].evidence_refs[0].source_fingerprint is not None
+        # Topic 4 ref should NOT have been enriched
+        assert clusters[3].evidence_refs[0].source_raw_index is None
+        assert clusters[3].evidence_refs[0].source_fingerprint is None
+
+        # --- Run resolution ---
+        result, stats = resolve_topic_fundstellen(
+            clusters, fundstellen,
+            raw_index_to_fundstelle=raw_index_to_fs,
+            fingerprint_to_fundstelle=fp_to_fs,
+        )
+
+        # Topic 1: 2 index matches
+        assert len(result[0][1]) == 2
+        # Topic 2: 1 fingerprint + 1 index
+        assert len(result[1][1]) == 2
+        # Topic 3: 1 enriched → should resolve via index
+        assert len(result[2][1]) == 1
+        # Topic 4: empty ref → 0
+        assert len(result[3][1]) == 0
+
+        # Telemetry consistency checks
+        assert stats.direct_index_matches >= 3  # At least topics 1 (x2), 2 (x1), 3 (x1 via enrichment)
+        assert stats.source_fingerprint_matches >= 0
+        assert stats.unresolved_references == 1  # Topic 4 empty ref
+        assert stats.refs_missing_provenance == 1  # Topic 4 empty ref
+        assert stats.total_references == 6
+        assert (
+            stats.direct_index_matches
+            + stats.source_fingerprint_matches
+            + stats.unresolved_references
+            + stats.ambiguous_fingerprints
+            + stats.duplicate_reference_collisions
+            == stats.total_references
+        )
+
+    def test_no_final_themes_with_zero_fundstellen(self):
+        """Simulate the invariant check: themes with 0 Fundstellen get dropped."""
+        # Topic with valid provenance
+        ref_good = _make_ref(1, "F1")
+        cluster_good = _make_cluster("Good Topic", [ref_good])
+
+        # Topic with empty ref (will have 0 Fundstellen)
+        ref_bad = TopicEvidenceRef()
+        cluster_bad = _make_cluster("Bad Topic", [ref_bad])
+
+        fs = _make_fundstelle("F1")
+        result, stats = resolve_topic_fundstellen(
+            [cluster_good, cluster_bad], [fs],
+            raw_index_to_fundstelle={0: [fs]},
+            fingerprint_to_fundstelle={},
+        )
+
+        # Simulate the invariant check from orchestrator
+        themes_dropped = 0
+        for cluster, linked_fs in result:
+            if len(linked_fs) == 0:
+                themes_dropped += 1
+
+        assert themes_dropped == 1  # Bad Topic has 0 fundstellen
+        assert len(result[0][1]) == 1  # Good Topic has 1
+
+
+# =============================================================================
+# E. NO HIDDEN FALLBACK REGRESSION
+# =============================================================================
+
+class TestTelemetrySanity:
+    """Task 7: Telemetry fields are correct and consistent."""
+
+    def test_exact_title_fallback_matches_does_not_exist(self):
+        """The removed field must not appear in LinkageStats or to_dict."""
+        stats = LinkageStats()
+        assert not hasattr(stats, "exact_title_fallback_matches")
+        assert "exact_title_fallback_matches" not in stats.to_dict()
+
+    def test_refs_missing_provenance_correct(self):
+        """Missing provenance is counted correctly for mixed refs."""
+        ref_with_index = _make_ref(1, "A")
+        ref_with_fp = TopicEvidenceRef(source_fingerprint="abc")
+        ref_with_both = TopicEvidenceRef(source_raw_index=0, source_fingerprint="def")
+        ref_title_only = TopicEvidenceRef(source_title="Title")
+        ref_empty = TopicEvidenceRef()
+
+        cluster = _make_cluster("Topic", [
+            ref_with_index, ref_with_fp, ref_with_both,
+            ref_title_only, ref_empty,
+        ])
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert stats.refs_missing_provenance == 2  # title_only + empty
+        assert stats.total_references == 5
+
+    def test_total_references_equals_sum(self):
+        """total_references must equal the sum of all outcome counters."""
+        text = "Test clause."
+        fp = build_source_fingerprint(text, ["seg1"])
+        fs = _make_fundstelle("F", textstelle=text, absatz_ids=["seg1"])
+
+        ref_index = _make_ref(1, "F1")
+        ref_fp = TopicEvidenceRef(source_fingerprint=fp)
+        ref_empty = TopicEvidenceRef()
+
+        cluster = _make_cluster("Topic", [ref_index, ref_fp, ref_empty])
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={0: [fs]},
+            fingerprint_to_fundstelle={fp: [fs]},
+        )
+
+        outcomes = (
+            stats.direct_index_matches
+            + stats.source_fingerprint_matches
+            + stats.unresolved_references
+            + stats.ambiguous_fingerprints
+            + stats.duplicate_reference_collisions
+        )
+        assert outcomes == stats.total_references
+
+    def test_ambiguous_fingerprints_counted_correctly(self):
+        """Ambiguous fingerprint is counted once per attempt, not per candidate."""
+        fp = build_source_fingerprint("same", ["seg1"])
+        fs_a = _make_fundstelle("A", textstelle="same", absatz_ids=["seg1"])
+        fs_b = _make_fundstelle("B", textstelle="same", absatz_ids=["seg1"])
+
+        # Two refs trying the same ambiguous fingerprint
+        ref1 = TopicEvidenceRef(source_fingerprint=fp)
+        ref2 = TopicEvidenceRef(source_fingerprint=fp)
+        cluster = _make_cluster("Topic", [ref1, ref2])
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [fs_a, fs_b],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={fp: [fs_a, fs_b]},
+        )
+
+        assert stats.ambiguous_fingerprints == 2  # Each ref attempt counts
+        assert stats.source_fingerprint_matches == 0
+        assert stats.unresolved_references == 2
+
+
+class TestNoHiddenFallback:
+    """Task 6: Verify no title-based or fuzzy matching exists in the resolver."""
+
+    def test_resolver_ignores_matching_title(self):
+        """Even with a perfectly matching title, resolver must not link without provenance."""
+        fs = _make_fundstelle("Perfect Match Title")
+        ref = TopicEvidenceRef(source_title="Perfect Match Title")
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.unresolved_references == 1
+
+    def test_resolver_ignores_partial_title_match(self):
+        """Partial title overlap must not trigger any matching."""
+        fs = _make_fundstelle("Unbeschränkte Haftung des Auftragnehmers")
+        ref = TopicEvidenceRef(source_title="Unbeschränkte Haftung")
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.unresolved_references == 1
+
+    def test_resolver_ignores_case_variant_title(self):
+        """Case-variant title must not trigger matching without provenance."""
+        fs = _make_fundstelle("HAFTUNG")
+        ref = TopicEvidenceRef(source_title="haftung")
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.unresolved_references == 1
