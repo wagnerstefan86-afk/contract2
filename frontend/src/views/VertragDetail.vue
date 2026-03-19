@@ -85,118 +85,91 @@
         &middot; {{ finalEditorial.metriken.anzahl_ausgewaehlte_evidenzen }} Evidenzen
       </div>
 
-      <!-- Final themes -->
+      <!-- Final themes (sorted by risk then evidence count) -->
       <div
-        v-for="thema in finalEditorial.finale_themen"
+        v-for="thema in sortedThemen"
         :key="thema.id"
-        style="background: white; border-radius: 6px; margin-bottom: 0.75rem; border: 1px solid #e5e7eb; overflow: hidden;"
+        :style="{ background: 'white', borderRadius: '8px', marginBottom: '0.75rem', overflow: 'hidden', borderTop: '1px solid #e5e7eb', borderRight: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', borderLeft: `5px solid ${risikoFarbe(thema.risikostufe)}` }"
       >
-        <!-- Theme header -->
-        <div
-          style="padding: 0.75rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
-          :style="{ borderLeft: `4px solid ${risikoFarbe(thema.risikostufe)}` }"
-          @click="toggleGruppe(thema.id)"
+        <!-- HEADER — clickable, opens detail page for primary evidence -->
+        <router-link
+          :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
+          style="display: block; padding: 0.75rem 1rem 0; text-decoration: none; color: inherit;"
         >
-          <div style="flex: 1;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-              <strong>{{ thema.titel }}</strong>
-              <StatusBadge :status="thema.risikostufe" />
-              <span style="background: #dbeafe; color: #1e40af; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 999px;">
-                {{ thema.fundstellen.length }} {{ thema.fundstellen.length === 1 ? 'Evidenz' : 'Evidenzen' }}
-              </span>
-              <span style="color: #6b7280; font-size: 0.8rem;">{{ thema.kategorie }}</span>
+          <div style="display: flex; align-items: flex-start; justify-content: space-between;">
+            <div style="flex: 1; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                <StatusBadge :status="thema.risikostufe" />
+                <strong style="font-size: 1rem; color: #111827;">{{ thema.titel }}</strong>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem;">
+                <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ thema.kategorie }}</span>
+                <span style="color: #9ca3af; font-size: 0.75rem;">{{ thema.fundstellen.length }} {{ thema.fundstellen.length === 1 ? 'Evidenz' : 'Evidenzen' }}</span>
+              </div>
             </div>
-            <div v-if="!offeneGruppen.has(thema.id)" style="color: #374151; font-size: 0.8rem; margin-top: 0.25rem;">
-              {{ (thema.problem_summary || thema.kurzbeschreibung).substring(0, 200) }}{{ (thema.problem_summary || thema.kurzbeschreibung).length > 200 ? '...' : '' }}
-            </div>
+            <span style="color: #9ca3af; font-size: 1rem; margin-left: 0.5rem; margin-top: 0.2rem;" title="Details anzeigen">&#8594;</span>
           </div>
-          <span style="color: #9ca3af; font-size: 1.2rem; margin-left: 0.5rem;">
-            {{ offeneGruppen.has(thema.id) ? '▼' : '▶' }}
-          </span>
+        </router-link>
+
+        <!-- PROBLEM — max 2 lines, never a paragraph -->
+        <div style="padding: 0.35rem 1rem 0.5rem; font-size: 0.85rem; color: #374151; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+          {{ truncate(thema.problem_summary || thema.kurzbeschreibung, 180) }}
         </div>
 
-        <!-- Expanded content -->
-        <div v-if="offeneGruppen.has(thema.id)" style="border-top: 1px solid #e5e7eb;">
-          <!-- Problem summary + impact -->
-          <div style="padding: 0.75rem 1rem; background: #f9fafb; font-size: 0.85rem;">
-            <div v-if="thema.problem_summary" style="color: #374151; margin-bottom: 0.5rem; font-weight: 500;">{{ thema.problem_summary }}</div>
-            <div v-else style="color: #374151; margin-bottom: 0.5rem;">{{ thema.kurzbeschreibung }}</div>
-            <ul v-if="thema.impact && thema.impact.length" style="margin: 0.25rem 0 0.5rem 1rem; padding: 0; color: #991b1b; font-size: 0.8rem;">
-              <li v-for="(imp, ii) in thema.impact" :key="ii" style="margin-bottom: 0.15rem;">{{ imp }}</li>
+        <!-- IMPACT — optional, max 2 bullets -->
+        <div v-if="thema.impact && thema.impact.length" style="padding: 0 1rem 0.5rem;">
+          <ul style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+            <li
+              v-for="(imp, ii) in thema.impact.slice(0, 2)"
+              :key="ii"
+              style="font-size: 0.8rem; color: #991b1b; line-height: 1.35; margin-bottom: 0.1rem;"
+            >{{ truncate(imp, 80) }}</li>
+          </ul>
+        </div>
+
+        <!-- RECOMMENDATION — always visible, highlighted -->
+        <div style="padding: 0.5rem 1rem; background: #f0fdf4; border-top: 1px solid #dcfce7;">
+          <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.25rem;">
+            <span style="font-size: 0.85rem;">&#9989;</span>
+            <strong style="font-size: 0.75rem; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</strong>
+          </div>
+          <ul v-if="thema.recommendation && thema.recommendation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+            <li
+              v-for="(r, ri) in thema.recommendation.slice(0, 2)"
+              :key="ri"
+              style="font-size: 0.8rem; color: #15803d; line-height: 1.35; margin-bottom: 0.1rem;"
+            >{{ truncate(r, 80) }}</li>
+          </ul>
+          <div v-else style="font-size: 0.8rem; color: #6b7280; font-style: italic;">Empfehlung wird generiert...</div>
+        </div>
+
+        <!-- NEGOTIATION — collapsed toggle, hidden if empty -->
+        <div v-if="thema.negotiation && thema.negotiation.length" style="border-top: 1px solid #e5e7eb;">
+          <button
+            style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.4rem 1rem; background: none; border: none; cursor: pointer; font-size: 0.78rem; color: #9a3412;"
+            @click.prevent="toggleVerhandlung(thema.id)"
+          >
+            <span>{{ offeneVerhandlungen.has(thema.id) ? '&#9660;' : '&#9654;' }}</span>
+            <span>Verhandlung anzeigen</span>
+          </button>
+          <div v-if="offeneVerhandlungen.has(thema.id)" style="padding: 0 1rem 0.5rem;">
+            <ul style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+              <li
+                v-for="(n, ni) in thema.negotiation.slice(0, 2)"
+                :key="ni"
+                style="font-size: 0.8rem; color: #9a3412; line-height: 1.35; margin-bottom: 0.1rem;"
+              >{{ truncate(n, 80) }}</li>
             </ul>
           </div>
-
-          <!-- Recommendation + Negotiation inline -->
-          <div v-if="(thema.recommendation && thema.recommendation.length) || (thema.negotiation && thema.negotiation.length)" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid #e5e7eb; font-size: 0.8rem;">
-            <div v-if="thema.recommendation && thema.recommendation.length" style="padding: 0.5rem 1rem; border-right: 1px solid #e5e7eb;">
-              <strong style="color: #166534; font-size: 0.75rem; text-transform: uppercase;">Empfehlung</strong>
-              <ul style="margin: 0.25rem 0 0 1rem; padding: 0; color: #374151;">
-                <li v-for="(r, ri) in thema.recommendation" :key="ri" style="margin-bottom: 0.15rem;">{{ r }}</li>
-              </ul>
-            </div>
-            <div v-if="thema.negotiation && thema.negotiation.length" style="padding: 0.5rem 1rem;">
-              <strong style="color: #9a3412; font-size: 0.75rem; text-transform: uppercase;">Verhandlung</strong>
-              <ul style="margin: 0.25rem 0 0 1rem; padding: 0; color: #374151;">
-                <li v-for="(n, ni) in thema.negotiation" :key="ni" style="margin-bottom: 0.15rem;">{{ n }}</li>
-              </ul>
-            </div>
-          </div>
-
-          <!-- Evidence table -->
-          <table style="margin: 0; border-radius: 0;">
-            <thead>
-              <tr><th></th><th>Fundstelle</th><th>Risiko</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              <template v-for="f in thema.fundstellen" :key="f.id">
-                <tr :style="{ background: f.ist_primaer ? '#eff6ff' : 'white' }">
-                  <td style="width: 30px; text-align: center;">
-                    <span v-if="f.ist_primaer" style="color: #2563eb; font-weight: bold; font-size: 0.75rem;" title="Primärevidenz">P</span>
-                    <span v-else style="color: #6b7280; font-size: 0.75rem;" title="Sekundärevidenz">S</span>
-                  </td>
-                  <td>
-                    <router-link :to="`/pruefung/${f.id}`">{{ f.kurzbeschreibung }}</router-link>
-                    <span v-if="f.evidence_heading_path" style="display: block; font-size: 0.75rem; color: #9ca3af; margin-top: 0.15rem;">{{ f.evidence_heading_path }}</span>
-                  </td>
-                  <td><StatusBadge :status="f.risikostufe" /></td>
-                  <td><StatusBadge :status="f.pruef_status" /></td>
-                </tr>
-                <!-- Scope text preview row -->
-                <tr v-if="f.scope_text && offeneGruppen.has(thema.id)" :style="{ background: f.ist_primaer ? '#f0f7ff' : '#fafafa' }">
-                  <td></td>
-                  <td colspan="3" style="padding: 0.4rem 0.75rem; font-size: 0.8rem; color: #4b5563; border-top: none;">
-                    <div style="white-space: pre-wrap; line-height: 1.4; max-height: 100px; overflow: hidden;">{{ f.scope_text.substring(0, 400) }}{{ f.scope_text.length > 400 ? '...' : '' }}</div>
-                    <div v-if="f.trigger_spans && f.trigger_spans.length" style="margin-top: 0.3rem; font-size: 0.75rem; color: #92400e;">
-                      Relevante Passagen: {{ f.trigger_spans.join(' | ') }}
-                    </div>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-
-          <!-- Recommendation block -->
-          <div style="padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; font-size: 0.8rem;">
-            <div v-if="thema.alternativformulierung" style="margin-bottom: 0.5rem;">
-              <strong style="color: #374151;">Alternativformulierung:</strong>
-              <div style="color: #4b5563; margin-top: 0.25rem; padding: 0.5rem; background: #f0fdf4; border-radius: 4px; border: 1px solid #bbf7d0;">
-                {{ thema.alternativformulierung }}
-              </div>
-            </div>
-            <div v-if="thema.bieterfrage" style="margin-bottom: 0.5rem;">
-              <strong style="color: #374151;">Bieterfrage:</strong>
-              <div style="color: #4b5563; margin-top: 0.25rem; padding: 0.5rem; background: #fef3c7; border-radius: 4px; border: 1px solid #fde68a;">
-                {{ thema.bieterfrage }}
-              </div>
-            </div>
-            <div v-if="thema.verhandlungsargumente && thema.verhandlungsargumente.length > 0">
-              <strong style="color: #374151;">Verhandlungsargumente:</strong>
-              <ul style="margin: 0.25rem 0 0 1rem; color: #4b5563;">
-                <li v-for="(arg, ai) in thema.verhandlungsargumente" :key="ai">{{ arg }}</li>
-              </ul>
-            </div>
-          </div>
         </div>
+
+        <!-- Details CTA (bottom bar) -->
+        <router-link
+          :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
+          style="display: block; padding: 0.4rem 1rem; border-top: 1px solid #e5e7eb; font-size: 0.78rem; color: #2563eb; text-decoration: none; text-align: right;"
+        >
+          Details &#8594;
+        </router-link>
       </div>
 
       <!-- Rejected themes (collapsible) -->
@@ -449,12 +422,43 @@ const laeuft = computed(() =>
 
 function risikoFarbe(risiko: string): string {
   switch (risiko) {
-    case "Kritisch": return "#7c3aed";
+    case "Kritisch": return "#991b1b";
     case "Hoch": return "#dc2626";
     case "Mittel": return "#f59e0b";
-    case "Niedrig": return "#16a34a";
-    default: return "#6366f1";
+    case "Niedrig": return "#9ca3af";
+    default: return "#6b7280";
   }
+}
+
+const RISIKO_SORT_ORDER: Record<string, number> = {
+  "Kritisch": 0,
+  "Hoch": 1,
+  "Mittel": 2,
+  "Niedrig": 3,
+};
+
+const sortedThemen = computed(() => {
+  if (!finalEditorial.value) return [];
+  return [...finalEditorial.value.finale_themen].sort((a, b) => {
+    const ra = RISIKO_SORT_ORDER[a.risikostufe] ?? 9;
+    const rb = RISIKO_SORT_ORDER[b.risikostufe] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return b.fundstellen.length - a.fundstellen.length;
+  });
+});
+
+const offeneVerhandlungen = ref<Set<string>>(new Set());
+
+function toggleVerhandlung(id: string) {
+  const s = new Set(offeneVerhandlungen.value);
+  if (s.has(id)) { s.delete(id); } else { s.add(id); }
+  offeneVerhandlungen.value = s;
+}
+
+function truncate(text: string, max: number): string {
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return text.substring(0, max).replace(/\s+\S*$/, "") + "...";
 }
 
 function toggleGruppe(gruppeId: string) {
