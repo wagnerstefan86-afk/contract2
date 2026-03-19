@@ -339,7 +339,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             "themen_anzahl": len(topic_clusters),
             "dauer_sekunden": dur_cluster,
             "themen": [
-                {"titel": t.titel, "evidence_count": len(t.evidence_titles)}
+                {"titel": t.titel, "evidence_count": len(t.evidence_refs)}
                 for t in topic_clusters
             ],
         }
@@ -522,7 +522,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         await _log(db, aid, vid,
                    f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
                    f"Linkage: {linkage_stats.direct_index_matches} by index, "
-                   f"{linkage_stats.fingerprint_matches} by exact title, "
+                   f"{linkage_stats.exact_title_matches} by exact title, "
                    f"{linkage_stats.unresolved_evidences} unresolved.",
                    details=metriken)
 

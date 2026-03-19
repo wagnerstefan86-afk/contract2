@@ -107,16 +107,30 @@ WICHTIG:
 
 
 @dataclass
+class TopicEvidenceRef:
+    """Structured reference from a topic to a raw finding.
+
+    Replaces the fragile parallel-list model (evidence_titles + evidence_indices).
+    Each ref carries both identifiers so they cannot go out of sync.
+    """
+    # 1-based finding number from the LLM input list (maps to all_raw_findings)
+    finding_nr: int | None = None
+    # Original kurzbeschreibung title as returned by the LLM
+    source_title: str | None = None
+    # 0-based index into the raw findings list (= finding_nr - 1 when present)
+    source_raw_index: int | None = None
+    # Deterministic hash of textstelle[:200] + segment_ids (filled during resolution)
+    source_fingerprint: str | None = None
+
+
+@dataclass
 class TopicCluster:
     """Result of LLM topic clustering."""
     titel: str
     kategorie: str
     risikostufe: str
     beschreibung: str
-    evidence_titles: list[str] = field(default_factory=list)
-    # Deterministic evidence linkage: 1-based finding indices from the LLM input list.
-    # These map directly to the all_raw_findings list used as clustering input.
-    evidence_indices: list[int] = field(default_factory=list)
+    evidence_refs: list[TopicEvidenceRef] = field(default_factory=list)
 
 
 async def clustere_findings(
@@ -174,7 +188,7 @@ async def clustere_findings(
         return None
 
     # Filter out empty clusters
-    clusters = [c for c in clusters if c.evidence_titles]
+    clusters = [c for c in clusters if c.evidence_refs]
 
     # --- Post-LLM refinement pipeline ---
     clusters = _refine_clusters(clusters)
@@ -212,7 +226,7 @@ def _refine_clusters(clusters: list[TopicCluster]) -> list[TopicCluster]:
     clusters = _enforce_target_count(clusters, max_count=12)
 
     # Final cleanup: remove any now-empty clusters
-    clusters = [c for c in clusters if c.evidence_titles]
+    clusters = [c for c in clusters if c.evidence_refs]
 
     return clusters
 
@@ -274,7 +288,10 @@ def _merge_similar_topics(
                 ).ratio()
 
                 # Evidence keyword overlap (check if evidence titles share keywords)
-                evidence_overlap = _evidence_keyword_overlap(a.evidence_titles, b.evidence_titles)
+                evidence_overlap = _evidence_keyword_overlap(
+                    [r.source_title for r in a.evidence_refs if r.source_title],
+                    [r.source_title for r in b.evidence_refs if r.source_title],
+                )
 
                 # Combined merge score: title is primary, category and evidence boost
                 combined = titel_score * 0.5 + kat_score * 0.25 + evidence_overlap * 0.25
@@ -307,8 +324,8 @@ def _reassign_singles(clusters: list[TopicCluster]) -> list[TopicCluster]:
     changed = True
     while changed:
         changed = False
-        singles = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_titles) == 1]
-        multi = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_titles) > 1]
+        singles = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_refs) == 1]
+        multi = [(i, c) for i, c in enumerate(clusters) if len(c.evidence_refs) > 1]
 
         if not multi:
             break
@@ -328,7 +345,10 @@ def _reassign_singles(clusters: list[TopicCluster]) -> list[TopicCluster]:
                 if single.kategorie.lower() == target.kategorie.lower():
                     score += 0.15
                 # Check evidence keyword overlap
-                score += _evidence_keyword_overlap(single.evidence_titles, target.evidence_titles) * 0.1
+                score += _evidence_keyword_overlap(
+                    [r.source_title for r in single.evidence_refs if r.source_title],
+                    [r.source_title for r in target.evidence_refs if r.source_title],
+                ) * 0.1
 
                 if score > best_score:
                     best_score = score
@@ -338,8 +358,7 @@ def _reassign_singles(clusters: list[TopicCluster]) -> list[TopicCluster]:
             # since we prefer fewer topics over preserving tiny ones)
             if best_target is not None and best_score >= 0.35:
                 target_cluster = clusters[best_target]
-                target_cluster.evidence_titles.extend(single.evidence_titles)
-                target_cluster.evidence_indices.extend(single.evidence_indices)
+                target_cluster.evidence_refs.extend(single.evidence_refs)
                 # Merge beschreibung
                 if single.beschreibung:
                     target_cluster.beschreibung += f" {single.beschreibung}"
@@ -362,43 +381,44 @@ def _reassign_singles(clusters: list[TopicCluster]) -> list[TopicCluster]:
 def _deduplicate_evidence(clusters: list[TopicCluster]) -> list[TopicCluster]:
     """Remove duplicate evidence across topics.
 
-    If an evidence title appears in multiple topics, keep it only in the
-    topic with the highest risk level (or the one with more evidence).
-    Keeps evidence_indices synchronized with evidence_titles.
+    If an evidence ref appears in multiple topics (by source_title or finding_nr),
+    keep it only in the topic with the highest risk level (or the one with more evidence).
     """
-    # Build map: evidence_title -> list of (cluster_index, position)
+    # Build map: dedup key -> list of (cluster_index, position)
     evidence_map: dict[str, list[tuple[int, int]]] = {}
     for ci, cluster in enumerate(clusters):
-        for ei, ev_title in enumerate(cluster.evidence_titles):
-            key = ev_title.lower().strip()
+        for ei, ref in enumerate(cluster.evidence_refs):
+            # Use finding_nr as primary key, fall back to source_title
+            if ref.finding_nr is not None:
+                key = f"nr:{ref.finding_nr}"
+            elif ref.source_title:
+                key = f"title:{ref.source_title.lower().strip()}"
+            else:
+                continue
             evidence_map.setdefault(key, []).append((ci, ei))
 
     # Find duplicates and decide which cluster keeps each evidence
-    to_remove: set[tuple[int, int]] = set()  # (cluster_idx, evidence_idx)
+    to_remove: set[tuple[int, int]] = set()
 
     for key, locations in evidence_map.items():
         if len(locations) <= 1:
             continue
 
-        # Keep in the cluster with highest risk, then most evidence
         def cluster_priority(loc: tuple[int, int]) -> tuple[int, int]:
             ci = loc[0]
-            return (_risk_order(clusters[ci].risikostufe), len(clusters[ci].evidence_titles))
+            return (_risk_order(clusters[ci].risikostufe), len(clusters[ci].evidence_refs))
 
         locations_sorted = sorted(locations, key=cluster_priority, reverse=True)
-        # Keep first (highest priority), remove rest
         for loc in locations_sorted[1:]:
             to_remove.add(loc)
             logger.debug(
                 f"Evidence dedup: '{key[:50]}' entfernt aus '{clusters[loc[0]].titel}'"
             )
 
-    # Remove in reverse order to preserve indices (both titles and indices lists)
+    # Remove in reverse order to preserve indices
     for ci, ei in sorted(to_remove, reverse=True):
-        if ei < len(clusters[ci].evidence_titles):
-            clusters[ci].evidence_titles.pop(ei)
-        if ei < len(clusters[ci].evidence_indices):
-            clusters[ci].evidence_indices.pop(ei)
+        if ei < len(clusters[ci].evidence_refs):
+            clusters[ci].evidence_refs.pop(ei)
 
     return clusters
 
@@ -421,7 +441,7 @@ def _enforce_target_count(
                     _normalize_for_compare(clusters[j].titel),
                 ).ratio()
                 # Heavily prefer merging small topics
-                size_penalty = min(len(clusters[i].evidence_titles), len(clusters[j].evidence_titles))
+                size_penalty = min(len(clusters[i].evidence_refs), len(clusters[j].evidence_refs))
                 adjusted = score + (1.0 / max(size_penalty, 1)) * 0.3
 
                 if adjusted > best_score:
@@ -445,8 +465,7 @@ def _enforce_target_count(
 
 def _merge_into(target: TopicCluster, source: TopicCluster) -> None:
     """Merge source topic into target. Modifies target in-place."""
-    target.evidence_titles.extend(source.evidence_titles)
-    target.evidence_indices.extend(source.evidence_indices)
+    target.evidence_refs.extend(source.evidence_refs)
 
     # Keep the longer/more descriptive title
     if len(source.titel) > len(target.titel):
@@ -520,29 +539,33 @@ def _parse_clusters(items: list[dict]) -> list[TopicCluster] | None:
         try:
             raw_risk = str(item.get("risk_level", "Mittel")).lower()
             evidence = item.get("evidence", [])
-            evidence_titles = []
-            evidence_indices = []
+            evidence_refs: list[TopicEvidenceRef] = []
             if isinstance(evidence, list):
                 for ev in evidence:
                     if isinstance(ev, dict):
                         title = ev.get("ursprungstitel", "")
-                        if title:
-                            evidence_titles.append(str(title))
-                        # Extract 1-based finding index (deterministic linkage)
                         nr = ev.get("finding_nr")
+                        finding_nr: int | None = None
+                        raw_index: int | None = None
                         if nr is not None:
                             try:
-                                evidence_indices.append(int(nr))
+                                finding_nr = int(nr)
+                                raw_index = finding_nr - 1  # Convert 1-based to 0-based
                             except (ValueError, TypeError):
                                 pass
+                        if title or finding_nr is not None:
+                            evidence_refs.append(TopicEvidenceRef(
+                                finding_nr=finding_nr,
+                                source_title=str(title) if title else None,
+                                source_raw_index=raw_index,
+                            ))
 
             clusters.append(TopicCluster(
                 titel=str(item.get("topic_title", "")),
                 kategorie=str(item.get("category", "")),
                 risikostufe=RISK_LEVEL_MAP.get(raw_risk, raw_risk.capitalize()),
                 beschreibung=str(item.get("beschreibung", "")),
-                evidence_titles=evidence_titles,
-                evidence_indices=evidence_indices,
+                evidence_refs=evidence_refs,
             ))
         except Exception:
             continue
@@ -554,7 +577,7 @@ def _parse_clusters(items: list[dict]) -> list[TopicCluster] | None:
 class LinkageStats:
     """Debug statistics for evidence-to-Fundstelle resolution."""
     direct_index_matches: int = 0
-    fingerprint_matches: int = 0
+    exact_title_matches: int = 0
     unresolved_evidences: int = 0
     duplicate_references: int = 0
     total_evidences: int = 0
@@ -562,7 +585,7 @@ class LinkageStats:
     def to_dict(self) -> dict:
         return {
             "direct_index_matches": self.direct_index_matches,
-            "fingerprint_matches": self.fingerprint_matches,
+            "exact_title_matches": self.exact_title_matches,
             "unresolved_evidences": self.unresolved_evidences,
             "duplicate_references": self.duplicate_references,
             "total_evidences": self.total_evidences,
@@ -590,8 +613,8 @@ def resolve_topic_fundstellen(
     """Resolve topic evidence to persisted Fundstelle objects using deterministic linkage.
 
     Resolution order (no fuzzy matching):
-    1. Direct index lookup via evidence_indices → raw_index_to_fundstelle mapping
-    2. Fingerprint lookup via textstelle hash + segment_ids
+    1. Direct index lookup via TopicEvidenceRef.source_raw_index → raw_index_to_fundstelle
+    2. Exact title match via TopicEvidenceRef.source_title == Fundstelle.kurzbeschreibung
 
     Args:
         clusters: TopicCluster objects from clustering LLM
@@ -605,55 +628,46 @@ def resolve_topic_fundstellen(
     """
     stats = LinkageStats()
 
-    # Build fingerprint index over all persisted Fundstelle for fallback resolution
-    fp_to_fundstelle: dict[str, list] = {}
-    for fs in fundstellen:
-        fp = _build_fingerprint(fs.textstelle, fs.absatz_ids)
-        fp_to_fundstelle.setdefault(fp, []).append(fs)
-
     # Track which Fundstelle are already assigned (prevent duplicates across topics)
     assigned_fs_ids: set = set()
     cluster_fundstellen: dict[int, list] = {i: [] for i in range(len(clusters))}
 
     for ci, cluster in enumerate(clusters):
-        for ev_idx, ev_title in enumerate(cluster.evidence_titles):
+        for ref in cluster.evidence_refs:
             stats.total_evidences += 1
             resolved_fs = None
 
             # --- Strategy 1: Direct index lookup ---
-            if (raw_index_to_fundstelle is not None
-                    and ev_idx < len(cluster.evidence_indices)):
-                # evidence_indices are 1-based from LLM, convert to 0-based
-                raw_idx_1based = cluster.evidence_indices[ev_idx]
-                raw_idx = raw_idx_1based - 1
-
-                candidates = raw_index_to_fundstelle.get(raw_idx, [])
+            if raw_index_to_fundstelle is not None and ref.source_raw_index is not None:
+                candidates = raw_index_to_fundstelle.get(ref.source_raw_index, [])
                 for fs in candidates:
                     if fs.id not in assigned_fs_ids:
                         resolved_fs = fs
                         stats.direct_index_matches += 1
+                        # Fill fingerprint on successful resolution
+                        ref.source_fingerprint = _build_fingerprint(
+                            fs.textstelle, fs.absatz_ids)
                         break
 
-            # --- Strategy 2: Fingerprint lookup (deterministic, no fuzzy) ---
-            if resolved_fs is None:
-                # Try to match via fingerprint from the evidence title
-                # The evidence title is a kurzbeschreibung — we need to find
-                # a Fundstelle whose textstelle fingerprint matches.
-                # Since we can't compute fingerprint from title alone, iterate
-                # Fundstelle and match by exact kurzbeschreibung equality first.
+            # --- Strategy 2: Exact title match (deterministic, no fuzzy) ---
+            if resolved_fs is None and ref.source_title:
+                title_norm = ref.source_title.lower().strip()
                 for fs in fundstellen:
                     if fs.id in assigned_fs_ids:
                         continue
-                    if fs.kurzbeschreibung.lower().strip() == ev_title.lower().strip():
+                    if fs.kurzbeschreibung.lower().strip() == title_norm:
                         resolved_fs = fs
-                        stats.fingerprint_matches += 1
+                        stats.exact_title_matches += 1
+                        ref.source_fingerprint = _build_fingerprint(
+                            fs.textstelle, fs.absatz_ids)
                         break
 
             # --- No match found ---
             if resolved_fs is None:
                 stats.unresolved_evidences += 1
+                label = ref.source_title[:60] if ref.source_title else f"nr={ref.finding_nr}"
                 logger.warning(
-                    f"Topic '{cluster.titel}': Evidence '{ev_title[:60]}' "
+                    f"Topic '{cluster.titel}': Evidence '{label}' "
                     f"konnte nicht aufgelöst werden (kein Index-Match, kein exakter Titel-Match)"
                 )
                 continue
@@ -676,7 +690,7 @@ def resolve_topic_fundstellen(
 
     logger.info(
         f"Evidence linkage: {stats.direct_index_matches} by index, "
-        f"{stats.fingerprint_matches} by exact title, "
+        f"{stats.exact_title_matches} by exact title, "
         f"{stats.unresolved_evidences} unresolved, "
         f"{stats.duplicate_references} duplicates "
         f"(total: {stats.total_evidences})"

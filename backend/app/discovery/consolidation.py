@@ -30,7 +30,7 @@ class ConsolidatedFinding:
     raw_count: int = 1
     # Indices of all source RawFindings (from the input list) that were
     # merged into this consolidated finding. Used for deterministic
-    # evidence linkage from TopicCluster.evidence_indices.
+    # evidence linkage from TopicCluster.evidence_refs.
     source_raw_indices: list[int] = field(default_factory=list)
 
     def merge_info(self) -> dict:
