@@ -6,6 +6,7 @@
       <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
         <StatusBadge :status="f.risikostufe" />
         <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3;">{{ displayTitel }}</h1>
+        <DecisionBadge v-if="te" :status="currentDecisionStatus" />
       </div>
       <p style="margin: 0.35rem 0 0; color: #374151; font-size: 0.95rem; line-height: 1.5;">{{ displayProblemSummary }}</p>
       <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem;">
@@ -32,16 +33,24 @@
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
       <!-- Recommendation -->
       <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #16a34a;">
-        <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
-        <ul v-if="displayRecommendation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
+        <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.4rem;">
+          <h3 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
+          <span v-if="te?.recommendation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px;">Manuell</span>
+        </div>
+        <div v-if="te?.recommendation_override" style="margin: 0; line-height: 1.4; font-size: 0.9rem; color: #1f2937; white-space: pre-wrap;">{{ te.recommendation_override }}</div>
+        <ul v-else-if="displayRecommendation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
           <li v-for="(item, i) in displayRecommendation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
         </ul>
         <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Klausel im Detail prüfen und ggf. nachverhandeln.</p>
       </div>
       <!-- Negotiation -->
       <div style="background: #fff7ed; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #ea580c;">
-        <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
-        <ul v-if="displayNegotiation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
+        <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.4rem;">
+          <h3 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
+          <span v-if="te?.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px;">Manuell</span>
+        </div>
+        <div v-if="te?.negotiation_override" style="margin: 0; line-height: 1.4; font-size: 0.9rem; color: #1f2937; white-space: pre-wrap;">{{ te.negotiation_override }}</div>
+        <ul v-else-if="displayNegotiation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
           <li v-for="(item, i) in displayNegotiation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
         </ul>
         <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Marktübliche Regelung als Gegenvorschlag einbringen.</p>
@@ -161,6 +170,83 @@
       </div>
     </div>
 
+    <!-- Tab: Entscheidung -->
+    <div v-if="activeTab === 'entscheidung' && te" style="display: flex; flex-direction: column; gap: 1rem;">
+      <!-- Decision status -->
+      <div style="background: white; padding: 1rem; border-radius: 6px;">
+        <h3 style="margin: 0 0 0.75rem; font-size: 0.95rem; color: #374151;">Entscheidungsstatus</h3>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button
+            v-for="ds in decisionStates"
+            :key="ds.value"
+            :style="{
+              padding: '0.5rem 1rem',
+              borderRadius: '6px',
+              border: currentDecisionStatus === ds.value ? `2px solid ${ds.activeColor}` : '1px solid #d1d5db',
+              background: currentDecisionStatus === ds.value ? ds.activeBg : 'white',
+              color: currentDecisionStatus === ds.value ? ds.activeColor : '#6b7280',
+              fontWeight: currentDecisionStatus === ds.value ? '600' : '400',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+            }"
+            @click="setDecisionStatus(ds.value)"
+          >{{ ds.label }}</button>
+        </div>
+      </div>
+
+      <!-- Decision comment -->
+      <div style="background: white; padding: 1rem; border-radius: 6px;">
+        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Entscheidungskommentar</h3>
+        <textarea
+          v-model="decisionComment"
+          placeholder="Begründung der Entscheidung (optional)"
+          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 80px; font-family: inherit; font-size: 0.9rem;"
+        ></textarea>
+      </div>
+
+      <!-- Recommendation override -->
+      <div style="background: white; padding: 1rem; border-radius: 6px;">
+        <h3 style="margin: 0 0 0.25rem; font-size: 0.95rem; color: #374151;">Empfehlung (manuelle Ergänzung)</h3>
+        <p style="margin: 0 0 0.5rem; font-size: 0.78rem; color: #9ca3af;">Überschreibt die KI-Empfehlung. Leer lassen = KI-Empfehlung beibehalten.</p>
+        <textarea
+          v-model="recommendationOverride"
+          placeholder="Eigene Empfehlung / Verhandlungsposition..."
+          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 60px; font-family: inherit; font-size: 0.9rem;"
+        ></textarea>
+        <!-- Show original AI recommendation for reference -->
+        <div v-if="te.recommendation && te.recommendation.length" style="margin-top: 0.5rem; padding: 0.5rem; background: #f9fafb; border-radius: 4px; font-size: 0.78rem; color: #6b7280;">
+          <strong>KI-Empfehlung:</strong>
+          <ul style="margin: 0.25rem 0 0 1rem; padding: 0;">
+            <li v-for="(r, i) in te.recommendation" :key="i">{{ r }}</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Negotiation override -->
+      <div style="background: white; padding: 1rem; border-radius: 6px;">
+        <h3 style="margin: 0 0 0.25rem; font-size: 0.95rem; color: #374151;">Verhandlung (manuelle Ergänzung)</h3>
+        <p style="margin: 0 0 0.5rem; font-size: 0.78rem; color: #9ca3af;">Überschreibt die KI-Verhandlungsargumente. Leer lassen = KI-Vorschlag beibehalten.</p>
+        <textarea
+          v-model="negotiationOverride"
+          placeholder="Eigene Verhandlungsstrategie / Argumente..."
+          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 60px; font-family: inherit; font-size: 0.9rem;"
+        ></textarea>
+        <!-- Show original AI negotiation for reference -->
+        <div v-if="te.negotiation && te.negotiation.length" style="margin-top: 0.5rem; padding: 0.5rem; background: #f9fafb; border-radius: 4px; font-size: 0.78rem; color: #6b7280;">
+          <strong>KI-Verhandlung:</strong>
+          <ul style="margin: 0.25rem 0 0 1rem; padding: 0;">
+            <li v-for="(n, i) in te.negotiation" :key="i">{{ n }}</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Save button -->
+      <button
+        style="background: #2563eb; color: white; padding: 0.6rem 1.5rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; align-self: flex-start;"
+        @click="saveDecision"
+      >Entscheidung speichern</button>
+    </div>
+
     <!-- Tab: Nachweise -->
     <div v-if="activeTab === 'nachweise'" style="display: flex; flex-direction: column; gap: 1rem;">
       <div style="background: #f9fafb; padding: 1rem; border-radius: 6px;">
@@ -207,6 +293,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
+import DecisionBadge from "../components/DecisionBadge.vue";
 import type { Fundstelle, FundstelleDetail as FundstelleDetailType, ThemaEditorialContext } from "../types";
 
 const route = useRoute();
@@ -215,14 +302,53 @@ const kommentar = ref("");
 const statusOptionen = ["Offen", "Bestätigt", "Abgelehnt", "Zurückgestellt"];
 const activeTab = ref("textstelle");
 
-const tabs = [
-  { key: "textstelle", label: "Textstelle & Kontext" },
-  { key: "bewertung", label: "Bewertung" },
-  { key: "nachweise", label: "Nachweise" },
-];
+const tabs = computed(() => {
+  const base = [
+    { key: "textstelle", label: "Textstelle & Kontext" },
+    { key: "bewertung", label: "Bewertung" },
+  ];
+  if (te.value) {
+    base.push({ key: "entscheidung", label: "Entscheidung" });
+  }
+  base.push({ key: "nachweise", label: "Nachweise" });
+  return base;
+});
 
 const d = computed<FundstelleDetailType | null>(() => f.value?.detail ?? null);
 const te = computed<ThemaEditorialContext | null>(() => f.value?.thema_editorial ?? null);
+
+// Decision layer state
+const decisionComment = ref("");
+const recommendationOverride = ref("");
+const negotiationOverride = ref("");
+const currentDecisionStatus = ref("OPEN");
+
+const decisionStates = [
+  { value: "OPEN", label: "Offen", activeColor: "#6b7280", activeBg: "#f3f4f6" },
+  { value: "IN_NEGOTIATION", label: "In Verhandlung", activeColor: "#92400e", activeBg: "#fffbeb" },
+  { value: "ACCEPTED", label: "Akzeptiert", activeColor: "#1d4ed8", activeBg: "#eff6ff" },
+  { value: "REJECTED", label: "Abgelehnt", activeColor: "#dc2626", activeBg: "#fef2f2" },
+  { value: "CLOSED", label: "Geschlossen", activeColor: "#16a34a", activeBg: "#f0fdf4" },
+];
+
+function setDecisionStatus(status: string) {
+  currentDecisionStatus.value = status;
+}
+
+async function saveDecision() {
+  if (!te.value?.thema_id) return;
+  try {
+    await api.patch(`/risikothemen/${te.value.thema_id}/decision`, {
+      decision_status: currentDecisionStatus.value,
+      decision_comment: decisionComment.value || null,
+      recommendation_override: recommendationOverride.value || null,
+      negotiation_override: negotiationOverride.value || null,
+    });
+    await laden();
+  } catch (e) {
+    console.error("Decision save failed:", e);
+  }
+}
 
 // Display title: prefer theme editorial title, fallback to truncated kurzbeschreibung
 const displayTitel = computed(() => {
@@ -339,6 +465,14 @@ async function laden() {
   const res = await api.get(`/fundstellen/${route.params.id}`);
   f.value = res.data;
   kommentar.value = res.data.pruef_kommentar || "";
+  // Initialize decision fields from theme editorial context
+  const teData = res.data.thema_editorial;
+  if (teData) {
+    currentDecisionStatus.value = teData.decision_status || "OPEN";
+    decisionComment.value = teData.decision_comment || "";
+    recommendationOverride.value = teData.recommendation_override || "";
+    negotiationOverride.value = teData.negotiation_override || "";
+  }
 }
 
 async function setStatus(status: string) {

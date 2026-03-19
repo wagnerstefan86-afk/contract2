@@ -3,8 +3,9 @@
 import logging
 import uuid
 from collections import Counter
+from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,6 +18,8 @@ from app.models.benutzer import Benutzer
 from app.models.fundstelle import Fundstelle
 from app.models.risikothema import RisikoThema
 from app.schemas.risikothema import (
+    DECISION_STATES,
+    DecisionUpdate,
     EvidenceItem,
     RisikoThemaResponse,
     FinalEditorialResponse,
@@ -240,6 +243,11 @@ async def finale_themen_fuer_vertrag(
                         f"falling back to textstelle"
                     )
 
+                # Resolve decided_by name
+                decided_by_name = None
+                if hasattr(thema, "decided_by") and thema.decided_by:
+                    decided_by_name = thema.decided_by.name
+
                 finale_themen.append(FinalesThemaResponse(
                     id=thema.id,
                     titel=thema.titel,
@@ -257,6 +265,14 @@ async def finale_themen_fuer_vertrag(
                     fundstellen=fundstellen_out,
                     evidences=evidences,
                     sortierung=thema.sortierung,
+                    decision_status=thema.decision_status or "OPEN",
+                    decision_comment=thema.decision_comment,
+                    recommendation_override=thema.recommendation_override,
+                    negotiation_override=thema.negotiation_override,
+                    decided_by_user_id=thema.decided_by_user_id,
+                    decided_by_name=decided_by_name,
+                    decided_at=thema.decided_at,
+                    decision_updated_at=thema.decision_updated_at,
                 ))
             elif not thema.final_selected:
                 verworfene.append(VerworfenesThemaResponse(
@@ -385,4 +401,50 @@ async def risikothemen_debug(
         "metriken": metriken,
         "warnungen": warnungen,
         "aehnliche_themen": aehnliche_themen,
+    }
+
+
+@router.patch("/{thema_id}/decision")
+async def update_decision(
+    thema_id: uuid.UUID,
+    body: DecisionUpdate,
+    user: Benutzer = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the decision state for a risk theme."""
+    thema = await db.get(RisikoThema, thema_id)
+    if not thema:
+        raise HTTPException(status_code=404, detail="Risikothema nicht gefunden")
+
+    if body.decision_status is not None:
+        if body.decision_status not in DECISION_STATES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Ungültiger Status. Erlaubt: {', '.join(sorted(DECISION_STATES))}",
+            )
+        thema.decision_status = body.decision_status
+
+    if body.decision_comment is not None:
+        thema.decision_comment = body.decision_comment
+    if body.recommendation_override is not None:
+        thema.recommendation_override = body.recommendation_override
+    if body.negotiation_override is not None:
+        thema.negotiation_override = body.negotiation_override
+
+    thema.decided_by_user_id = user.id
+    thema.decided_at = thema.decided_at or datetime.utcnow()
+    thema.decision_updated_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(thema)
+
+    return {
+        "id": str(thema.id),
+        "decision_status": thema.decision_status,
+        "decision_comment": thema.decision_comment,
+        "recommendation_override": thema.recommendation_override,
+        "negotiation_override": thema.negotiation_override,
+        "decided_by_user_id": str(thema.decided_by_user_id) if thema.decided_by_user_id else None,
+        "decided_at": thema.decided_at.isoformat() if thema.decided_at else None,
+        "decision_updated_at": thema.decision_updated_at.isoformat() if thema.decision_updated_at else None,
     }

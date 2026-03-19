@@ -42,6 +42,20 @@ class RisikoThema(Base):
     # verhandlungsargumente, primaerfundstelle_id, sekundaerfundstelle_ids)
     final_editorial: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # --- Decision Layer fields ---
+    # Workflow status: OPEN, IN_NEGOTIATION, ACCEPTED, REJECTED, CLOSED
+    decision_status: Mapped[str] = mapped_column(String(50), default="OPEN", server_default="OPEN")
+    # Free-text comment from the reviewer
+    decision_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Human overrides for AI-generated recommendation/negotiation
+    recommendation_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    negotiation_override: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Who decided and when
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("benutzer.id"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decision_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     analyse = relationship("Analyse", back_populates="risikothemen")
     vertrag = relationship("Vertrag", back_populates="risikothemen")
     fundstellen = relationship("Fundstelle", secondary=risikothema_fundstellen, back_populates="risikothemen")
+    decided_by = relationship("Benutzer", foreign_keys=[decided_by_user_id], lazy="selectin")

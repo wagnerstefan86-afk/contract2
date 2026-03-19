@@ -44,6 +44,11 @@ class ThemaEditorialContext(BaseModel):
     alternativformulierung: str = ""
     bieterfrage: str = ""
     verhandlungsargumente: list[str] = []
+    # Decision layer
+    decision_status: str = "OPEN"
+    decision_comment: str | None = None
+    recommendation_override: str | None = None
+    negotiation_override: str | None = None
 
 
 class FundstelleDetailResponse(FundstelleResponse):

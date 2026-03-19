@@ -296,6 +296,10 @@ async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(g
             alternativformulierung=ed.get("alternativformulierung", ""),
             bieterfrage=ed.get("bieterfrage", ""),
             verhandlungsargumente=ed.get("verhandlungsargumente", []),
+            decision_status=thema.decision_status or "OPEN",
+            decision_comment=thema.decision_comment,
+            recommendation_override=thema.recommendation_override,
+            negotiation_override=thema.negotiation_override,
         )
 
     resp = FundstelleDetailResponse.model_validate(fundstelle)

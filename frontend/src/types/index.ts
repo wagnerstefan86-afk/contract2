@@ -54,6 +54,8 @@ export interface FundstelleDetail {
   position_im_text: number;
 }
 
+export type DecisionStatus = "OPEN" | "IN_NEGOTIATION" | "ACCEPTED" | "REJECTED" | "CLOSED";
+
 export interface ThemaEditorialContext {
   thema_id: string | null;
   titel: string;
@@ -65,6 +67,10 @@ export interface ThemaEditorialContext {
   alternativformulierung: string;
   bieterfrage: string;
   verhandlungsargumente: string[];
+  decision_status: DecisionStatus;
+  decision_comment: string | null;
+  recommendation_override: string | null;
+  negotiation_override: string | null;
 }
 
 export interface Fundstelle {
@@ -205,6 +211,15 @@ export interface FinalesThema {
   negotiation: string[];
   fundstellen: FinalesThemaFundstelle[];
   sortierung: number;
+  // Decision layer
+  decision_status: DecisionStatus;
+  decision_comment: string | null;
+  recommendation_override: string | null;
+  negotiation_override: string | null;
+  decided_by_user_id: string | null;
+  decided_by_name: string | null;
+  decided_at: string | null;
+  decision_updated_at: string | null;
 }
 
 export interface VerworfenesThema {

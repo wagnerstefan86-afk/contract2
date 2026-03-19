@@ -101,6 +101,14 @@ async def _ensure_schema():
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS final_selected BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS final_verwerfungsgrund TEXT",
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS final_editorial JSONB",
+        # -- risikothemen: decision layer --
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decision_status VARCHAR(50) NOT NULL DEFAULT 'OPEN'",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decision_comment TEXT",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS recommendation_override TEXT",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS negotiation_override TEXT",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decided_by_user_id UUID REFERENCES benutzer(id)",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decided_at TIMESTAMP",
+        "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decision_updated_at TIMESTAMP",
         # -- analysen: pipeline evaluation data --
         "ALTER TABLE analysen ADD COLUMN IF NOT EXISTS auswertung JSONB",
     ]

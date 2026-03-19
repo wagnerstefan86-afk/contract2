@@ -76,18 +76,33 @@
 
     <!-- FINAL EDITORIAL view (reduced core themes — main view for reviewers) -->
     <div v-if="ansicht === 'final' && finalEditorial && finalEditorial.metriken.hat_editorial">
-      <!-- Metrics bar -->
-      <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 0.6rem 1rem; font-size: 0.8rem; color: #1e40af; margin-bottom: 0.75rem;">
-        <strong>Final Editorial:</strong>
-        {{ finalEditorial.metriken.anzahl_finale_themen_nachher }} Kernthemen
-        aus {{ finalEditorial.metriken.anzahl_cluster_themen_vorher }} Cluster-Themen selektiert
-        &middot; {{ finalEditorial.metriken.anzahl_verworfene_themen }} verworfen
-        &middot; {{ finalEditorial.metriken.anzahl_ausgewaehlte_evidenzen }} Evidenzen
+      <!-- Metrics + filter bar -->
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
+        <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 0.45rem 0.75rem; font-size: 0.78rem; color: #1e40af;">
+          <strong>{{ finalEditorial.metriken.anzahl_finale_themen_nachher }}</strong> Kernthemen
+          &middot; {{ finalEditorial.metriken.anzahl_ausgewaehlte_evidenzen }} Evidenzen
+        </div>
+        <div style="display: flex; gap: 0.25rem; flex-wrap: wrap;">
+          <button
+            v-for="df in decisionFilters"
+            :key="df.value"
+            :style="{
+              padding: '0.25rem 0.55rem',
+              fontSize: '0.72rem',
+              borderRadius: '999px',
+              border: activeDecisionFilter === df.value ? '1px solid #2563eb' : '1px solid #d1d5db',
+              background: activeDecisionFilter === df.value ? '#eff6ff' : 'white',
+              color: activeDecisionFilter === df.value ? '#1d4ed8' : '#6b7280',
+              cursor: 'pointer',
+            }"
+            @click="activeDecisionFilter = df.value"
+          >{{ df.label }} <span v-if="df.count > 0" style="font-weight: 600;">({{ df.count }})</span></button>
+        </div>
       </div>
 
-      <!-- Final themes (sorted by risk then evidence count) -->
+      <!-- Final themes (sorted by risk then evidence count, filtered by decision) -->
       <div
-        v-for="thema in sortedThemen"
+        v-for="thema in filteredSortedThemen"
         :key="thema.id"
         :style="{ background: 'white', borderRadius: '8px', marginBottom: '0.75rem', overflow: 'hidden', borderTop: '1px solid #e5e7eb', borderRight: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', borderLeft: `5px solid ${risikoFarbe(thema.risikostufe)}` }"
       >
@@ -101,6 +116,7 @@
               <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                 <StatusBadge :status="thema.risikostufe" />
                 <strong style="font-size: 1rem; color: #111827;">{{ thema.titel }}</strong>
+                <DecisionBadge :status="thema.decision_status || 'OPEN'" />
               </div>
               <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem;">
                 <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ thema.kategorie }}</span>
@@ -111,7 +127,7 @@
           </div>
         </router-link>
 
-        <!-- PROBLEM — max 2 lines, never a paragraph -->
+        <!-- PROBLEM — max 2 lines -->
         <div style="padding: 0.35rem 1rem 0.5rem; font-size: 0.85rem; color: #374151; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
           {{ truncate(thema.problem_summary || thema.kurzbeschreibung, 180) }}
         </div>
@@ -128,12 +144,17 @@
         </div>
 
         <!-- RECOMMENDATION — always visible, highlighted -->
+        <!-- If override exists, show override; otherwise show AI recommendation -->
         <div style="padding: 0.5rem 1rem; background: #f0fdf4; border-top: 1px solid #dcfce7;">
           <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.25rem;">
             <span style="font-size: 0.85rem;">&#9989;</span>
             <strong style="font-size: 0.75rem; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</strong>
+            <span v-if="thema.recommendation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px; margin-left: 0.25rem;">Manuell</span>
           </div>
-          <ul v-if="thema.recommendation && thema.recommendation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+          <div v-if="thema.recommendation_override" style="font-size: 0.8rem; color: #15803d; line-height: 1.35;">
+            {{ truncate(thema.recommendation_override, 160) }}
+          </div>
+          <ul v-else-if="thema.recommendation && thema.recommendation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
             <li
               v-for="(r, ri) in thema.recommendation.slice(0, 2)"
               :key="ri"
@@ -144,16 +165,20 @@
         </div>
 
         <!-- NEGOTIATION — collapsed toggle, hidden if empty -->
-        <div v-if="thema.negotiation && thema.negotiation.length" style="border-top: 1px solid #e5e7eb;">
+        <div v-if="(thema.negotiation_override) || (thema.negotiation && thema.negotiation.length)" style="border-top: 1px solid #e5e7eb;">
           <button
             style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.4rem 1rem; background: none; border: none; cursor: pointer; font-size: 0.78rem; color: #9a3412;"
             @click.prevent="toggleVerhandlung(thema.id)"
           >
             <span>{{ offeneVerhandlungen.has(thema.id) ? '&#9660;' : '&#9654;' }}</span>
             <span>Verhandlung anzeigen</span>
+            <span v-if="thema.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px; margin-left: 0.25rem;">Manuell</span>
           </button>
           <div v-if="offeneVerhandlungen.has(thema.id)" style="padding: 0 1rem 0.5rem;">
-            <ul style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+            <div v-if="thema.negotiation_override" style="font-size: 0.8rem; color: #9a3412; line-height: 1.35;">
+              {{ truncate(thema.negotiation_override, 160) }}
+            </div>
+            <ul v-else style="margin: 0; padding-left: 1.1rem; list-style: disc;">
               <li
                 v-for="(n, ni) in thema.negotiation.slice(0, 2)"
                 :key="ni"
@@ -163,13 +188,30 @@
           </div>
         </div>
 
-        <!-- Details CTA (bottom bar) -->
-        <router-link
-          :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
-          style="display: block; padding: 0.4rem 1rem; border-top: 1px solid #e5e7eb; font-size: 0.78rem; color: #2563eb; text-decoration: none; text-align: right;"
-        >
-          Details &#8594;
-        </router-link>
+        <!-- DECISION CONTROLS — compact segmented control -->
+        <div style="padding: 0.45rem 1rem; border-top: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; gap: 0.2rem; flex-wrap: wrap;">
+            <button
+              v-for="ds in decisionStates"
+              :key="ds.value"
+              :style="{
+                padding: '0.2rem 0.45rem',
+                fontSize: '0.68rem',
+                borderRadius: '4px',
+                border: (thema.decision_status || 'OPEN') === ds.value ? `1px solid ${ds.activeColor}` : '1px solid #e5e7eb',
+                background: (thema.decision_status || 'OPEN') === ds.value ? ds.activeBg : 'white',
+                color: (thema.decision_status || 'OPEN') === ds.value ? ds.activeColor : '#9ca3af',
+                cursor: 'pointer',
+                fontWeight: (thema.decision_status || 'OPEN') === ds.value ? '600' : '400',
+              }"
+              @click.prevent="setDecision(thema.id, ds.value)"
+            >{{ ds.label }}</button>
+          </div>
+          <router-link
+            :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
+            style="font-size: 0.78rem; color: #2563eb; text-decoration: none; white-space: nowrap;"
+          >Details &#8594;</router-link>
+        </div>
       </div>
 
       <!-- Rejected themes (collapsible) -->
@@ -386,8 +428,9 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
+import DecisionBadge from "../components/DecisionBadge.vue";
 import DokumentVorschau from "../components/DokumentVorschau.vue";
-import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, ClusteringDebug, FinalEditorialResult } from "../types";
+import type { Vertrag, Analyse, Fundstelle, GruppiertesErgebnis, RisikoThema, ClusteringDebug, FinalEditorialResult, DecisionStatus } from "../types";
 
 const route = useRoute();
 const vertrag = ref<Vertrag | null>(null);
@@ -459,6 +502,55 @@ function truncate(text: string, max: number): string {
   if (!text) return "";
   if (text.length <= max) return text;
   return text.substring(0, max).replace(/\s+\S*$/, "") + "...";
+}
+
+// --- Decision layer ---
+
+const decisionStates = [
+  { value: "OPEN", label: "Offen", activeColor: "#6b7280", activeBg: "#f3f4f6" },
+  { value: "IN_NEGOTIATION", label: "In Verhandlung", activeColor: "#92400e", activeBg: "#fffbeb" },
+  { value: "ACCEPTED", label: "Akzeptiert", activeColor: "#1d4ed8", activeBg: "#eff6ff" },
+  { value: "REJECTED", label: "Abgelehnt", activeColor: "#dc2626", activeBg: "#fef2f2" },
+  { value: "CLOSED", label: "Geschlossen", activeColor: "#16a34a", activeBg: "#f0fdf4" },
+];
+
+const activeDecisionFilter = ref<string>("ALL");
+
+const decisionFilters = computed(() => {
+  const themen = sortedThemen.value;
+  const counts: Record<string, number> = { ALL: themen.length };
+  for (const t of themen) {
+    const s = t.decision_status || "OPEN";
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  return [
+    { value: "ALL", label: "Alle", count: counts.ALL },
+    { value: "OPEN", label: "Offen", count: counts.OPEN || 0 },
+    { value: "IN_NEGOTIATION", label: "In Verhandlung", count: counts.IN_NEGOTIATION || 0 },
+    { value: "ACCEPTED", label: "Akzeptiert", count: counts.ACCEPTED || 0 },
+    { value: "REJECTED", label: "Abgelehnt", count: counts.REJECTED || 0 },
+    { value: "CLOSED", label: "Geschlossen", count: counts.CLOSED || 0 },
+  ];
+});
+
+const filteredSortedThemen = computed(() => {
+  if (activeDecisionFilter.value === "ALL") return sortedThemen.value;
+  return sortedThemen.value.filter(t => (t.decision_status || "OPEN") === activeDecisionFilter.value);
+});
+
+async function setDecision(themaId: string, status: string) {
+  try {
+    await api.patch(`/risikothemen/${themaId}/decision`, { decision_status: status });
+    // Update local state immediately
+    if (finalEditorial.value) {
+      const thema = finalEditorial.value.finale_themen.find(t => t.id === themaId);
+      if (thema) {
+        thema.decision_status = status as DecisionStatus;
+      }
+    }
+  } catch (e) {
+    console.error("Decision update failed:", e);
+  }
 }
 
 function toggleGruppe(gruppeId: string) {

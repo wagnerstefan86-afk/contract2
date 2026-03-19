@@ -7,6 +7,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, computed_field
 
+# Valid decision states
+DECISION_STATES = {"OPEN", "IN_NEGOTIATION", "ACCEPTED", "REJECTED", "CLOSED"}
+
 
 class EvidenceItem(BaseModel):
     """A single piece of contract evidence supporting a risk theme."""
@@ -96,6 +99,15 @@ class FinalesThemaResponse(BaseModel):
     fundstellen: list[FinalesThemaFundstelleResponse]
     evidences: list[EvidenceItem] = []
     sortierung: int
+    # Decision layer
+    decision_status: str = "OPEN"
+    decision_comment: str | None = None
+    recommendation_override: str | None = None
+    negotiation_override: str | None = None
+    decided_by_user_id: UUID | None = None
+    decided_by_name: str | None = None
+    decided_at: datetime | None = None
+    decision_updated_at: datetime | None = None
 
 
 class VerworfenesThemaResponse(BaseModel):
@@ -111,3 +123,11 @@ class FinalEditorialResponse(BaseModel):
     finale_themen: list[FinalesThemaResponse]
     verworfene_themen: list[VerworfenesThemaResponse]
     metriken: dict
+
+
+class DecisionUpdate(BaseModel):
+    """Request body for updating a theme's decision state."""
+    decision_status: str | None = None
+    decision_comment: str | None = None
+    recommendation_override: str | None = None
+    negotiation_override: str | None = None
