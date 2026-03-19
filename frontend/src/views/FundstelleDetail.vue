@@ -1,288 +1,229 @@
 <template>
   <div v-if="f" style="max-width: 860px;">
-    <!-- Header -->
-    <div style="margin-bottom: 1.25rem;">
+    <!-- === HEADER === -->
+    <div style="margin-bottom: 1rem;">
       <router-link :to="`/vertrag/${f.vertrag_id}`" style="color: #6b7280; font-size: 0.85rem;">Zurück zum Vertrag</router-link>
-      <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
         <StatusBadge :status="f.risikostufe" />
-        <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3;">{{ displayTitel }}</h1>
+        <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">{{ displayTitel }}</h1>
         <DecisionBadge v-if="te" :status="currentDecisionStatus" />
       </div>
-      <p style="margin: 0.35rem 0 0; color: #374151; font-size: 0.95rem; line-height: 1.5;">{{ displayProblemSummary }}</p>
       <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem;">
-        <span style="color: #6b7280; font-size: 0.8rem;">{{ f.kategorie }}</span>
-        <span v-if="d && d.seite" style="color: #9ca3af; font-size: 0.8rem;">
-          | Seite {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}
-        </span>
-        <span v-if="f.evidence_heading_path" style="color: #9ca3af; font-size: 0.8rem;">
-          | {{ f.evidence_heading_path.substring(0, 60) }}{{ f.evidence_heading_path.length > 60 ? '...' : '' }}
-        </span>
-        <span style="color: #9ca3af; font-size: 0.8rem;">| {{ f.pruef_status }}</span>
+        <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ f.kategorie }}</span>
+        <span v-if="f.evidence_page_from" style="color: #9ca3af; font-size: 0.78rem;">Seite {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</span>
+        <span v-else-if="d && d.seite" style="color: #9ca3af; font-size: 0.78rem;">Seite {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</span>
+        <span v-if="f.evidence_heading_path" style="color: #9ca3af; font-size: 0.78rem;">{{ f.evidence_heading_path.substring(0, 50) }}{{ f.evidence_heading_path.length > 50 ? '...' : '' }}</span>
       </div>
     </div>
 
-    <!-- Impact -->
-    <div v-if="displayImpact.length" style="background: #fef2f2; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #dc2626; margin-bottom: 1rem;">
-      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 0.03em;">Auswirkungen</h3>
-      <ul style="margin: 0; padding-left: 1.2rem; list-style: disc;">
-        <li v-for="(item, i) in displayImpact" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
+    <!-- === PROBLEM === -->
+    <div style="padding: 0.6rem 1rem; background: white; border-radius: 6px; margin-bottom: 0.75rem; border: 1px solid #e5e7eb; font-size: 0.9rem; color: #374151; line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;">
+      {{ displayProblemSummary }}
+    </div>
+
+    <!-- === IMPACT === -->
+    <div v-if="displayImpact.length" style="background: #fef2f2; padding: 0.6rem 1rem; border-radius: 6px; border-left: 4px solid #dc2626; margin-bottom: 0.75rem;">
+      <h3 style="margin: 0 0 0.3rem; font-size: 0.78rem; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 0.03em;">Auswirkungen</h3>
+      <ul style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+        <li v-for="(item, i) in displayImpact.slice(0, 3)" :key="i" style="margin-bottom: 0.15rem; line-height: 1.35; font-size: 0.85rem; color: #1f2937;">{{ item }}</li>
       </ul>
     </div>
 
-    <!-- Action Block: Recommendation + Negotiation (always visible) -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
-      <!-- Recommendation -->
-      <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #16a34a;">
-        <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.4rem;">
-          <h3 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
-          <span v-if="te?.recommendation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px;">Manuell</span>
-        </div>
-        <div v-if="te?.recommendation_override" style="margin: 0; line-height: 1.4; font-size: 0.9rem; color: #1f2937; white-space: pre-wrap;">{{ te.recommendation_override }}</div>
-        <ul v-else-if="displayRecommendation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
-          <li v-for="(item, i) in displayRecommendation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
-        </ul>
-        <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Klausel im Detail prüfen und ggf. nachverhandeln.</p>
+    <!-- === RECOMMENDATION (strongest block, always visible) === -->
+    <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #16a34a; margin-bottom: 0.75rem; border: 1px solid #dcfce7; border-left: 4px solid #16a34a;">
+      <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.35rem;">
+        <span style="font-size: 0.9rem;">&#9989;</span>
+        <h3 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
+        <span v-if="te?.recommendation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0.05rem 0.35rem; border-radius: 3px; font-weight: 500;">Manuell</span>
       </div>
-      <!-- Negotiation -->
-      <div style="background: #fff7ed; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #ea580c;">
-        <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.4rem;">
-          <h3 style="margin: 0; font-size: 0.85rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
-          <span v-if="te?.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px;">Manuell</span>
-        </div>
-        <div v-if="te?.negotiation_override" style="margin: 0; line-height: 1.4; font-size: 0.9rem; color: #1f2937; white-space: pre-wrap;">{{ te.negotiation_override }}</div>
-        <ul v-else-if="displayNegotiation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
-          <li v-for="(item, i) in displayNegotiation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
-        </ul>
-        <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Marktübliche Regelung als Gegenvorschlag einbringen.</p>
+      <!-- Override takes priority -->
+      <div v-if="te?.recommendation_override" style="font-size: 0.88rem; color: #15803d; line-height: 1.45; white-space: pre-wrap;">{{ te.recommendation_override }}</div>
+      <!-- AI recommendation -->
+      <ul v-else-if="effectiveRecommendation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+        <li v-for="(item, i) in effectiveRecommendation.slice(0, 3)" :key="i" style="margin-bottom: 0.15rem; line-height: 1.4; font-size: 0.88rem; color: #15803d;">{{ item }}</li>
+      </ul>
+      <!-- Fallback -->
+      <p v-else style="margin: 0; color: #6b7280; font-size: 0.88rem;">Klausel im Detail prüfen und ggf. nachverhandeln.</p>
+      <!-- Show AI original when override is active -->
+      <div v-if="te?.recommendation_override && effectiveRecommendation.length" style="margin-top: 0.5rem; padding: 0.4rem 0.6rem; background: #f9fafb; border-radius: 4px; font-size: 0.75rem; color: #6b7280;">
+        <strong>KI-Original:</strong> {{ effectiveRecommendation.slice(0, 2).join(' · ') }}
       </div>
     </div>
 
-    <!-- Alternativformulierung (if available, shown directly) -->
-    <div v-if="displayAlternativ" style="background: #eff6ff; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #2563eb; margin-bottom: 1rem;">
-      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #1e40af; text-transform: uppercase; letter-spacing: 0.03em;">Alternativformulierung</h3>
-      <p style="margin: 0; line-height: 1.5; font-size: 0.9rem; font-style: italic; color: #1f2937;">{{ displayAlternativ }}</p>
-    </div>
-
-    <!-- Bieterfrage (if available, shown directly) -->
-    <div v-if="displayBieterfrage" style="background: #faf5ff; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #7c3aed; margin-bottom: 1.25rem;">
-      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #5b21b6; text-transform: uppercase; letter-spacing: 0.03em;">Bieterfrage</h3>
-      <p style="margin: 0; line-height: 1.5; font-size: 0.9rem; color: #1f2937;">{{ displayBieterfrage }}</p>
-    </div>
-
-    <!-- Tab navigation (secondary content only) -->
-    <div style="display: flex; gap: 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 1rem;">
+    <!-- === NEGOTIATION (visible if content exists) === -->
+    <div v-if="hasNegotiation" style="margin-bottom: 0.75rem;">
       <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        :style="{
-          padding: '0.5rem 1rem',
-          border: 'none',
-          borderBottom: activeTab === tab.key ? '2px solid #2563eb' : '2px solid transparent',
-          marginBottom: '-2px',
-          background: 'transparent',
-          color: activeTab === tab.key ? '#2563eb' : '#6b7280',
-          fontWeight: activeTab === tab.key ? '600' : '400',
-          cursor: 'pointer',
-          fontSize: '0.9rem',
-        }"
-        @click="activeTab = tab.key"
-      >{{ tab.label }}</button>
-    </div>
-
-    <!-- Tab: Textstelle & Kontext -->
-    <div v-if="activeTab === 'textstelle'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <!-- Paragraph / clause context (primary evidence) -->
-      <div v-if="f.scope_text" style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #2563eb;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #1e40af;">
-          {{ f.scope_type === 'clause_block' ? 'Klauselblock-Kontext' : 'Absatz-Kontext' }}
-          <span v-if="f.evidence_heading_path" style="font-weight: normal; color: #6b7280; font-size: 0.8rem; margin-left: 0.5rem;">{{ f.evidence_heading_path }}</span>
-        </h3>
-        <div style="white-space: pre-wrap; line-height: 1.6; font-size: 0.95rem;" v-html="highlightedScopeText"></div>
-      </div>
-
-      <!-- Trigger spans listed separately -->
-      <div v-if="f.trigger_spans && f.trigger_spans.length > 0" style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #92400e;">Relevante Passagen</h3>
-        <ul style="margin: 0; padding-left: 1.2rem;">
-          <li v-for="(span, i) in f.trigger_spans" :key="i" style="margin-bottom: 0.4rem; line-height: 1.5; font-size: 0.9rem;">
-            {{ span }}
-          </li>
+        style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.5rem 1rem; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; cursor: pointer; border-left: 4px solid #ea580c;"
+        @click="verhandlungOffen = !verhandlungOffen"
+      >
+        <span style="font-size: 0.78rem;">{{ verhandlungOffen ? '&#9660;' : '&#9654;' }}</span>
+        <h3 style="margin: 0; font-size: 0.78rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
+        <span v-if="te?.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0.05rem 0.35rem; border-radius: 3px; font-weight: 500;">Manuell</span>
+      </button>
+      <div v-if="verhandlungOffen" style="padding: 0.6rem 1rem; background: #fff7ed; border: 1px solid #fed7aa; border-top: none; border-radius: 0 0 6px 6px;">
+        <div v-if="te?.negotiation_override" style="font-size: 0.85rem; color: #9a3412; line-height: 1.4; white-space: pre-wrap;">{{ te.negotiation_override }}</div>
+        <ul v-else style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+          <li v-for="(item, i) in effectiveNegotiation.slice(0, 3)" :key="i" style="margin-bottom: 0.15rem; line-height: 1.4; font-size: 0.85rem; color: #9a3412;">{{ item }}</li>
         </ul>
-      </div>
-
-      <!-- Fallback: legacy textstelle if no scope_text -->
-      <div v-if="!f.scope_text" style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 4px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #92400e;">Betroffene Textstelle</h3>
-        <div style="white-space: pre-wrap; line-height: 1.6; font-size: 0.95rem;">{{ f.textstelle }}</div>
-      </div>
-
-      <!-- Legacy context from detail enrichment -->
-      <div v-if="d && d.kontext && !f.scope_text" style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Umgebender Kontext</h3>
-        <div style="white-space: pre-wrap; line-height: 1.5; font-size: 0.9rem; color: #374151; max-height: 400px; overflow-y: auto;" v-html="highlightedContext"></div>
-      </div>
-
-      <div style="background: #f9fafb; padding: 0.75rem 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #6b7280;">Referenzen</h3>
-        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.85rem;">
-          <div v-if="f.evidence_page_from"><strong>Seite:</strong> {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</div>
-          <div v-else-if="d && d.seite"><strong>Seite:</strong> {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</div>
-          <div v-if="f.evidence_heading_path"><strong>Klausel:</strong> {{ f.evidence_heading_path }}</div>
-          <div v-else-if="d && d.ueberschrift"><strong>Klausel:</strong> {{ d.ueberschrift }}</div>
-          <div v-if="d && d.absatz_referenzen && d.absatz_referenzen.length"><strong>Absätze:</strong> {{ d.absatz_referenzen.join(', ') }}</div>
-          <div v-if="d && d.segment_ids && d.segment_ids.length"><strong>Segmente:</strong> {{ d.segment_ids.join(', ') }}</div>
+        <div v-if="te?.negotiation_override && effectiveNegotiation.length" style="margin-top: 0.5rem; padding: 0.4rem 0.6rem; background: #fef3c7; border-radius: 4px; font-size: 0.75rem; color: #92400e;">
+          <strong>KI-Original:</strong> {{ effectiveNegotiation.slice(0, 2).join(' · ') }}
         </div>
       </div>
     </div>
 
-    <!-- Tab: Bewertung -->
-    <div v-if="activeTab === 'bewertung'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.75rem; font-size: 0.95rem; color: #374151;">Prüfstatus</h3>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-          <button
-            v-for="s in statusOptionen"
-            :key="s"
-            :style="{
-              background: f.pruef_status === s ? '#2563eb' : '#e5e7eb',
-              color: f.pruef_status === s ? 'white' : '#1a1a1a',
-              padding: '0.5rem 1rem',
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-            }"
-            @click="setStatus(s)"
-          >{{ s }}</button>
-        </div>
-      </div>
+    <!-- === ALTERNATIVFORMULIERUNG (if available) === -->
+    <div v-if="displayAlternativ" style="background: #eff6ff; padding: 0.6rem 1rem; border-radius: 6px; border-left: 4px solid #2563eb; margin-bottom: 0.75rem;">
+      <h3 style="margin: 0 0 0.25rem; font-size: 0.78rem; font-weight: 600; color: #1e40af; text-transform: uppercase; letter-spacing: 0.03em;">Alternativformulierung</h3>
+      <p style="margin: 0; line-height: 1.45; font-size: 0.85rem; font-style: italic; color: #1f2937;">{{ displayAlternativ }}</p>
+    </div>
 
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Prüfkommentar</h3>
-        <textarea
-          v-model="kommentar"
-          placeholder="Kommentar des Prüfers (optional)"
-          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 100px; font-family: inherit; font-size: 0.9rem;"
-        ></textarea>
+    <!-- === BIETERFRAGE (if available) === -->
+    <div v-if="displayBieterfrage" style="background: #faf5ff; padding: 0.6rem 1rem; border-radius: 6px; border-left: 4px solid #7c3aed; margin-bottom: 0.75rem;">
+      <h3 style="margin: 0 0 0.25rem; font-size: 0.78rem; font-weight: 600; color: #5b21b6; text-transform: uppercase; letter-spacing: 0.03em;">Bieterfrage</h3>
+      <p style="margin: 0; line-height: 1.45; font-size: 0.85rem; color: #1f2937;">{{ displayBieterfrage }}</p>
+    </div>
+
+    <!-- === DECISION === -->
+    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem;">
+      <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; font-weight: 600; color: #374151;">Entscheidung</h3>
+      <!-- Status buttons -->
+      <div style="display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
         <button
-          style="background: #2563eb; color: white; margin-top: 0.5rem; padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer;"
-          @click="speichern"
-        >Kommentar speichern</button>
+          v-for="ds in decisionStates"
+          :key="ds.value"
+          :style="{
+            padding: '0.3rem 0.65rem',
+            borderRadius: '6px',
+            border: currentDecisionStatus === ds.value ? `2px solid ${ds.activeColor}` : '1px solid #d1d5db',
+            background: currentDecisionStatus === ds.value ? ds.activeBg : 'white',
+            color: currentDecisionStatus === ds.value ? ds.activeColor : '#6b7280',
+            fontWeight: currentDecisionStatus === ds.value ? '600' : '400',
+            cursor: 'pointer',
+            fontSize: '0.8rem',
+          }"
+          @click="setDecisionStatus(ds.value)"
+        >{{ ds.label }}</button>
       </div>
-    </div>
-
-    <!-- Tab: Entscheidung -->
-    <div v-if="activeTab === 'entscheidung' && te" style="display: flex; flex-direction: column; gap: 1rem;">
-      <!-- Decision status -->
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.75rem; font-size: 0.95rem; color: #374151;">Entscheidungsstatus</h3>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-          <button
-            v-for="ds in decisionStates"
-            :key="ds.value"
-            :style="{
-              padding: '0.5rem 1rem',
-              borderRadius: '6px',
-              border: currentDecisionStatus === ds.value ? `2px solid ${ds.activeColor}` : '1px solid #d1d5db',
-              background: currentDecisionStatus === ds.value ? ds.activeBg : 'white',
-              color: currentDecisionStatus === ds.value ? ds.activeColor : '#6b7280',
-              fontWeight: currentDecisionStatus === ds.value ? '600' : '400',
-              cursor: 'pointer',
-              fontSize: '0.85rem',
-            }"
-            @click="setDecisionStatus(ds.value)"
-          >{{ ds.label }}</button>
-        </div>
-      </div>
-
-      <!-- Decision comment -->
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Entscheidungskommentar</h3>
-        <textarea
-          v-model="decisionComment"
-          placeholder="Begründung der Entscheidung (optional)"
-          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 80px; font-family: inherit; font-size: 0.9rem;"
-        ></textarea>
-      </div>
-
-      <!-- Recommendation override -->
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.25rem; font-size: 0.95rem; color: #374151;">Empfehlung (manuelle Ergänzung)</h3>
-        <p style="margin: 0 0 0.5rem; font-size: 0.78rem; color: #9ca3af;">Überschreibt die KI-Empfehlung. Leer lassen = KI-Empfehlung beibehalten.</p>
-        <textarea
-          v-model="recommendationOverride"
-          placeholder="Eigene Empfehlung / Verhandlungsposition..."
-          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 60px; font-family: inherit; font-size: 0.9rem;"
-        ></textarea>
-        <!-- Show original AI recommendation for reference -->
-        <div v-if="te.recommendation && te.recommendation.length" style="margin-top: 0.5rem; padding: 0.5rem; background: #f9fafb; border-radius: 4px; font-size: 0.78rem; color: #6b7280;">
-          <strong>KI-Empfehlung:</strong>
-          <ul style="margin: 0.25rem 0 0 1rem; padding: 0;">
-            <li v-for="(r, i) in te.recommendation" :key="i">{{ r }}</li>
-          </ul>
-        </div>
-      </div>
-
-      <!-- Negotiation override -->
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.25rem; font-size: 0.95rem; color: #374151;">Verhandlung (manuelle Ergänzung)</h3>
-        <p style="margin: 0 0 0.5rem; font-size: 0.78rem; color: #9ca3af;">Überschreibt die KI-Verhandlungsargumente. Leer lassen = KI-Vorschlag beibehalten.</p>
-        <textarea
-          v-model="negotiationOverride"
-          placeholder="Eigene Verhandlungsstrategie / Argumente..."
-          style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 60px; font-family: inherit; font-size: 0.9rem;"
-        ></textarea>
-        <!-- Show original AI negotiation for reference -->
-        <div v-if="te.negotiation && te.negotiation.length" style="margin-top: 0.5rem; padding: 0.5rem; background: #f9fafb; border-radius: 4px; font-size: 0.78rem; color: #6b7280;">
-          <strong>KI-Verhandlung:</strong>
-          <ul style="margin: 0.25rem 0 0 1rem; padding: 0;">
-            <li v-for="(n, i) in te.negotiation" :key="i">{{ n }}</li>
-          </ul>
-        </div>
-      </div>
-
-      <!-- Save button -->
+      <!-- Comment -->
+      <textarea
+        v-model="decisionComment"
+        placeholder="Kommentar zur Entscheidung (optional)"
+        style="width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 50px; font-family: inherit; font-size: 0.82rem; margin-bottom: 0.4rem; resize: vertical;"
+      ></textarea>
+      <!-- Override fields (collapsed by default) -->
       <button
-        style="background: #2563eb; color: white; padding: 0.6rem 1.5rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; align-self: flex-start;"
+        style="background: none; border: none; color: #6b7280; cursor: pointer; font-size: 0.75rem; padding: 0; text-decoration: underline; margin-bottom: 0.4rem;"
+        @click="overridesOffen = !overridesOffen"
+      >{{ overridesOffen ? 'Überschreibungen ausblenden' : 'Empfehlung / Verhandlung überschreiben' }}</button>
+      <div v-if="overridesOffen" style="display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.4rem;">
+        <div>
+          <label style="font-size: 0.75rem; color: #6b7280; display: block; margin-bottom: 0.15rem;">Empfehlung überschreiben</label>
+          <textarea
+            v-model="recommendationOverride"
+            placeholder="Eigene Empfehlung (leer = KI beibehalten)"
+            style="width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 40px; font-family: inherit; font-size: 0.82rem; resize: vertical;"
+          ></textarea>
+        </div>
+        <div>
+          <label style="font-size: 0.75rem; color: #6b7280; display: block; margin-bottom: 0.15rem;">Verhandlung überschreiben</label>
+          <textarea
+            v-model="negotiationOverride"
+            placeholder="Eigene Verhandlungsposition (leer = KI beibehalten)"
+            style="width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; min-height: 40px; font-family: inherit; font-size: 0.82rem; resize: vertical;"
+          ></textarea>
+        </div>
+      </div>
+      <button
+        style="background: #2563eb; color: white; padding: 0.4rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.82rem;"
         @click="saveDecision"
-      >Entscheidung speichern</button>
+      >Speichern</button>
     </div>
 
-    <!-- Tab: Nachweise -->
-    <div v-if="activeTab === 'nachweise'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div style="background: #f9fafb; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #6b7280;">Pipeline-Quellen</h3>
-        <div style="font-size: 0.85rem; color: #374151;">
-          <p><strong>Quelle:</strong> {{ f.quelle_pass || 'unbekannt' }}</p>
-          <p><strong>Erstellt:</strong> {{ datum(f.erstellt_am) }}</p>
-        </div>
+    <!-- === PRÜFSTATUS (compact) === -->
+    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+      <span style="font-size: 0.78rem; color: #6b7280; font-weight: 500;">Prüfstatus:</span>
+      <div style="display: flex; gap: 0.25rem;">
+        <button
+          v-for="s in statusOptionen"
+          :key="s"
+          :style="{
+            background: f.pruef_status === s ? '#2563eb' : '#f3f4f6',
+            color: f.pruef_status === s ? 'white' : '#6b7280',
+            padding: '0.2rem 0.55rem',
+            borderRadius: '4px',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.72rem',
+          }"
+          @click="setStatus(s)"
+        >{{ s }}</button>
       </div>
+      <div style="flex: 1; display: flex; gap: 0.35rem; align-items: center; min-width: 200px;">
+        <input
+          v-model="kommentar"
+          placeholder="Prüfkommentar..."
+          style="flex: 1; padding: 0.25rem 0.4rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.78rem; font-family: inherit;"
+          @keyup.enter="speichern"
+        >
+        <button
+          style="background: #e5e7eb; color: #374151; padding: 0.2rem 0.5rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.72rem; white-space: nowrap;"
+          @click="speichern"
+        >Speichern</button>
+      </div>
+    </div>
 
-      <div v-if="f.zusammenfuehrung" style="background: #f9fafb; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #6b7280;">Konsolidierung</h3>
-        <div style="font-size: 0.85rem;">
-          <p><strong>Rohkandidaten:</strong> {{ f.zusammenfuehrung.anzahl_roh_kandidaten || 1 }}</p>
-          <p><strong>Status:</strong> {{ f.zusammenfuehrung.ueberlebt_als || 'unbekannt' }}</p>
-          <div v-if="f.zusammenfuehrung.zusammengefuehrte_quellen && f.zusammenfuehrung.zusammengefuehrte_quellen.length > 1">
-            <p style="margin-bottom: 0.25rem;"><strong>Zusammengeführte Quellen:</strong></p>
-            <ul style="margin: 0; padding-left: 1.5rem;">
-              <li v-for="(q, i) in f.zusammenfuehrung.zusammengefuehrte_quellen" :key="i" style="margin-bottom: 0.25rem;">
-                {{ q.kurzbeschreibung }} ({{ q.quelle_pass }}, {{ q.status }})
-              </li>
-            </ul>
+    <!-- === CONTEXT (collapsible) === -->
+    <div style="margin-bottom: 0.75rem;">
+      <button
+        style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.5rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer;"
+        :style="{ borderRadius: kontextOffen ? '6px 6px 0 0' : '6px' }"
+        @click="kontextOffen = !kontextOffen"
+      >
+        <span style="font-size: 0.78rem;">{{ kontextOffen ? '&#9660;' : '&#9654;' }}</span>
+        <span style="font-size: 0.82rem; font-weight: 500; color: #374151;">Textstelle &amp; Kontext</span>
+      </button>
+      <div v-if="kontextOffen" style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 6px 6px; padding: 0.75rem 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+        <!-- Scope text with highlights -->
+        <div v-if="f.scope_text" style="border-left: 4px solid #2563eb; padding-left: 0.75rem;">
+          <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 0.25rem;">
+            {{ f.scope_type === 'clause_block' ? 'Klauselblock' : 'Absatz' }}
+            <span v-if="f.evidence_heading_path"> — {{ f.evidence_heading_path }}</span>
           </div>
+          <div style="white-space: pre-wrap; line-height: 1.55; font-size: 0.88rem;" v-html="highlightedScopeText"></div>
         </div>
-      </div>
 
-      <div v-if="d" style="background: #f9fafb; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.85rem; color: #6b7280;">Positionsdetails</h3>
-        <div style="font-size: 0.85rem;">
-          <p v-if="d.seite"><strong>Seite:</strong> {{ d.seite }}{{ d.seite_unsicher ? ' (geschätzt)' : '' }}</p>
-          <p v-if="d.ueberschrift"><strong>Nächste Überschrift:</strong> {{ d.ueberschrift }}</p>
-          <p v-if="d.absatz_referenzen && d.absatz_referenzen.length"><strong>Absätze:</strong> {{ d.absatz_referenzen.join(', ') }}</p>
-          <p v-if="d.segment_ids && d.segment_ids.length"><strong>Segmente:</strong> {{ d.segment_ids.join(', ') }}</p>
-          <p v-if="d.position_im_text >= 0"><strong>Zeichenposition:</strong> {{ d.position_im_text }}</p>
+        <!-- Trigger spans -->
+        <div v-if="f.trigger_spans && f.trigger_spans.length > 0" style="border-left: 4px solid #f59e0b; padding-left: 0.75rem;">
+          <div style="font-size: 0.75rem; color: #92400e; margin-bottom: 0.25rem;">Relevante Passagen</div>
+          <ul style="margin: 0; padding-left: 1rem;">
+            <li v-for="(span, i) in f.trigger_spans" :key="i" style="margin-bottom: 0.25rem; line-height: 1.4; font-size: 0.85rem;">{{ span }}</li>
+          </ul>
+        </div>
+
+        <!-- Fallback textstelle -->
+        <div v-if="!f.scope_text" style="border-left: 4px solid #f59e0b; padding-left: 0.75rem;">
+          <div style="font-size: 0.75rem; color: #92400e; margin-bottom: 0.25rem;">Betroffene Textstelle</div>
+          <div style="white-space: pre-wrap; line-height: 1.55; font-size: 0.88rem;">{{ f.textstelle }}</div>
+        </div>
+
+        <!-- Legacy context -->
+        <div v-if="d && d.kontext && !f.scope_text" style="padding-left: 0.75rem;">
+          <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 0.25rem;">Umgebender Kontext</div>
+          <div style="white-space: pre-wrap; line-height: 1.45; font-size: 0.85rem; color: #374151; max-height: 300px; overflow-y: auto;" v-html="highlightedContext"></div>
         </div>
       </div>
+    </div>
+
+    <!-- === METADATA (compact, always visible) === -->
+    <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.75rem; color: #6b7280; display: flex; gap: 1.25rem; flex-wrap: wrap;">
+      <span v-if="f.evidence_page_from"><strong>Seite:</strong> {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</span>
+      <span v-else-if="d && d.seite"><strong>Seite:</strong> {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</span>
+      <span v-if="f.evidence_heading_path"><strong>Klausel:</strong> {{ f.evidence_heading_path }}</span>
+      <span v-else-if="d && d.ueberschrift"><strong>Klausel:</strong> {{ d.ueberschrift }}</span>
+      <span v-if="d && d.absatz_referenzen && d.absatz_referenzen.length"><strong>Absätze:</strong> {{ d.absatz_referenzen.join(', ') }}</span>
+      <span v-if="d && d.segment_ids && d.segment_ids.length"><strong>Segmente:</strong> {{ d.segment_ids.join(', ') }}</span>
+      <span><strong>Quelle:</strong> {{ f.quelle_pass || 'unbekannt' }}</span>
+      <span><strong>Erstellt:</strong> {{ datum(f.erstellt_am) }}</span>
     </div>
   </div>
   <div v-else style="padding: 2rem; text-align: center; color: #6b7280;">Wird geladen...</div>
@@ -300,19 +241,11 @@ const route = useRoute();
 const f = ref<Fundstelle | null>(null);
 const kommentar = ref("");
 const statusOptionen = ["Offen", "Bestätigt", "Abgelehnt", "Zurückgestellt"];
-const activeTab = ref("textstelle");
 
-const tabs = computed(() => {
-  const base = [
-    { key: "textstelle", label: "Textstelle & Kontext" },
-    { key: "bewertung", label: "Bewertung" },
-  ];
-  if (te.value) {
-    base.push({ key: "entscheidung", label: "Entscheidung" });
-  }
-  base.push({ key: "nachweise", label: "Nachweise" });
-  return base;
-});
+// Collapsible sections
+const verhandlungOffen = ref(false);
+const kontextOffen = ref(false);
+const overridesOffen = ref(false);
 
 const d = computed<FundstelleDetailType | null>(() => f.value?.detail ?? null);
 const te = computed<ThemaEditorialContext | null>(() => f.value?.thema_editorial ?? null);
@@ -350,47 +283,47 @@ async function saveDecision() {
   }
 }
 
-// Display title: prefer theme editorial title, fallback to truncated kurzbeschreibung
+// --- Display computeds ---
+
 const displayTitel = computed(() => {
   if (te.value?.titel) return te.value.titel;
   const kb = f.value?.kurzbeschreibung || "";
-  // Truncate to ~8 words if too long
   const words = kb.split(/\s+/);
   if (words.length <= 8) return kb;
   return words.slice(0, 8).join(" ") + "…";
 });
 
-// Problem summary: prefer theme editorial, fallback to erklaerung first sentence
 const displayProblemSummary = computed(() => {
   if (te.value?.problem_summary) return te.value.problem_summary;
-  // Fallback: kurzbeschreibung (full, since title is now short)
   return f.value?.kurzbeschreibung || "";
 });
 
-// Impact bullets: from theme editorial
 const displayImpact = computed(() => te.value?.impact?.length ? te.value.impact : []);
 
-// Recommendation bullets: from theme editorial, fallback to empfehlung as single bullet
-const displayRecommendation = computed(() => {
+// Effective AI recommendation (before override check)
+const effectiveRecommendation = computed(() => {
   if (te.value?.recommendation?.length) return te.value.recommendation;
   if (f.value?.empfehlung) return [f.value.empfehlung];
   return [];
 });
 
-// Negotiation bullets: from theme editorial, fallback to verhandlungsargumente
-const displayNegotiation = computed(() => {
+// Effective AI negotiation (before override check)
+const effectiveNegotiation = computed(() => {
   if (te.value?.negotiation?.length) return te.value.negotiation;
   if (te.value?.verhandlungsargumente?.length) return te.value.verhandlungsargumente;
   if (d.value?.verhandlungsargumente) return [d.value.verhandlungsargumente];
   return [];
 });
 
-// Alternativformulierung
+// Whether negotiation section has any content (override or AI)
+const hasNegotiation = computed(() => {
+  return !!(te.value?.negotiation_override) || effectiveNegotiation.value.length > 0;
+});
+
 const displayAlternativ = computed(() => {
   return te.value?.alternativformulierung || d.value?.alternativformulierung || "";
 });
 
-// Bieterfrage
 const displayBieterfrage = computed(() => {
   return te.value?.bieterfrage || d.value?.bieterfrage || "";
 });
@@ -401,7 +334,6 @@ const highlightedScopeText = computed(() => {
   const spans = f.value.trigger_spans;
   if (!spans || spans.length === 0) return escapeHtml(scopeText);
 
-  // Highlight each trigger span within scope_text
   let result = scopeText;
   const markers: Array<{ start: number; end: number }> = [];
   for (const span of spans) {
@@ -415,7 +347,6 @@ const highlightedScopeText = computed(() => {
   }
   if (markers.length === 0) return escapeHtml(scopeText);
 
-  // Sort by start position, merge overlapping
   markers.sort((a, b) => a.start - b.start);
   const merged: Array<{ start: number; end: number }> = [markers[0]];
   for (let i = 1; i < markers.length; i++) {
@@ -427,7 +358,6 @@ const highlightedScopeText = computed(() => {
     }
   }
 
-  // Build HTML with highlights
   let html = "";
   let pos = 0;
   for (const m of merged) {
@@ -465,13 +395,16 @@ async function laden() {
   const res = await api.get(`/fundstellen/${route.params.id}`);
   f.value = res.data;
   kommentar.value = res.data.pruef_kommentar || "";
-  // Initialize decision fields from theme editorial context
   const teData = res.data.thema_editorial;
   if (teData) {
     currentDecisionStatus.value = teData.decision_status || "OPEN";
     decisionComment.value = teData.decision_comment || "";
     recommendationOverride.value = teData.recommendation_override || "";
     negotiationOverride.value = teData.negotiation_override || "";
+    // Auto-expand overrides section if overrides exist
+    if (teData.recommendation_override || teData.negotiation_override) {
+      overridesOffen.value = true;
+    }
   }
 }
 
