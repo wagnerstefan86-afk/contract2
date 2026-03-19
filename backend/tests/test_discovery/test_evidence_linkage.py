@@ -1,23 +1,27 @@
 """Tests for the deterministic source fingerprint evidence linkage model.
 
 Covers:
-A. Positive paths
-  1. Raw findings generate deterministic fingerprints from source attributes
-  2. Fingerprints survive clustering/consolidation/orchestration
-  3. Fingerprint-based linkage succeeds when direct index is missing
-  4. Multiple raw findings merged preserve provenance fingerprints
-  5. Duplicate evidence refs don't create duplicate junction rows
+A. Default mode (title fallback DISABLED)
+  1. Deterministic fingerprints from source attributes
+  2. Fingerprints survive consolidation
+  3. Fingerprint-based linkage when index missing
+  4. Merged findings preserve provenance fingerprints
+  5. Duplicate prevention
+  6. Missing provenance → unresolved, no title matching
+  7. exact_title_fallback_matches == 0 in default mode
+  8. refs_missing_provenance counted correctly
+  9. Ambiguous fingerprints not auto-linked
 
-B. Negative / integrity paths
-  6. Fingerprint collision (ambiguous) does not silently mislink
-  7. Missing fingerprint + missing index → unresolved, not guessed
-  8. Invalid final theme with zero links is dropped (invariant check)
-  9. Legacy API safeguard still hides zero-evidence themes
+B. Fallback enabled mode (title fallback ON via flag)
+  10. Title fallback works when explicitly enabled
+  11. Metrics correctly reflect fallback usage
+  12. Title fallback only triggers when index + fingerprint both fail
 
-C. Transitional fallback paths
-  10. Exact-title fallback triggers only when index + fingerprint both fail
-  11. Metrics label exact-title fallback honestly
-  12. Ambiguous exact-title does not auto-link incorrectly
+C. Regression / structural tests
+  13. Parse clusters, merge, dedup, reassign unchanged
+  14. Feature flag defaults to False
+  15. has_deterministic_provenance() helper
+  16. LinkageStats includes all metrics
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ import pytest
 
 from app.discovery.passes.base import RawFinding, build_source_fingerprint
 from app.discovery.passes.themen_cluster import (
+    ENABLE_TITLE_FALLBACK,
     TopicCluster,
     TopicEvidenceRef,
     LinkageStats,
@@ -66,7 +71,6 @@ def _make_cluster(titel: str, refs: list[TopicEvidenceRef],
 
 def _make_fundstelle(kurzbeschreibung: str, textstelle: str = "some text",
                      absatz_ids: list | None = None):
-    """Create a mock Fundstelle-like object."""
     return SimpleNamespace(
         id=uuid4(),
         kurzbeschreibung=kurzbeschreibung,
@@ -77,7 +81,6 @@ def _make_fundstelle(kurzbeschreibung: str, textstelle: str = "some text",
 
 def _make_raw_finding(textstelle: str, segment_ids: list[str] | None = None,
                       kurzbeschreibung: str = "test") -> RawFinding:
-    """Create a RawFinding with source_fingerprint computed."""
     sids = segment_ids or ["seg1"]
     return RawFinding(
         textstelle=textstelle,
@@ -93,167 +96,186 @@ def _make_raw_finding(textstelle: str, segment_ids: list[str] | None = None,
 
 
 # =============================================================================
-# A. POSITIVE PATHS
+# A. DEFAULT MODE — title fallback DISABLED
 # =============================================================================
 
-class TestSourceFingerprintGeneration:
-    """A.1: Raw findings with stable source attributes generate deterministic fingerprints."""
+class TestFeatureFlagDefault:
+    """The module-level flag must default to False."""
 
-    def test_fingerprint_deterministic(self):
-        fp1 = build_source_fingerprint("Der Auftragnehmer haftet unbeschränkt.", ["seg1", "seg2"])
-        fp2 = build_source_fingerprint("Der Auftragnehmer haftet unbeschränkt.", ["seg1", "seg2"])
-        assert fp1 == fp2
-        assert len(fp1) == 16
-
-    def test_fingerprint_segment_order_independent(self):
-        fp1 = build_source_fingerprint("text", ["seg2", "seg1"])
-        fp2 = build_source_fingerprint("text", ["seg1", "seg2"])
-        assert fp1 == fp2
-
-    def test_fingerprint_different_text_different_hash(self):
-        fp1 = build_source_fingerprint("Klausel A", ["seg1"])
-        fp2 = build_source_fingerprint("Klausel B", ["seg1"])
-        assert fp1 != fp2
-
-    def test_fingerprint_different_segments_different_hash(self):
-        fp1 = build_source_fingerprint("same text", ["seg1"])
-        fp2 = build_source_fingerprint("same text", ["seg2"])
-        assert fp1 != fp2
-
-    def test_fingerprint_uses_only_first_200_chars(self):
-        base = "x" * 200
-        fp1 = build_source_fingerprint(base + "AAAA", ["seg1"])
-        fp2 = build_source_fingerprint(base + "BBBB", ["seg1"])
-        assert fp1 == fp2
-
-    def test_fingerprint_case_insensitive(self):
-        fp1 = build_source_fingerprint("Der Auftragnehmer", ["seg1"])
-        fp2 = build_source_fingerprint("der auftragnehmer", ["seg1"])
-        assert fp1 == fp2
-
-    def test_fingerprint_empty_inputs(self):
-        fp = build_source_fingerprint("", [])
-        assert len(fp) == 16  # Still produces a hash
-
-    def test_raw_finding_has_fingerprint(self):
-        raw = _make_raw_finding("Der Auftragnehmer haftet.", ["seg1"])
-        assert raw.source_fingerprint
-        assert len(raw.source_fingerprint) == 16
-
-    def test_raw_finding_fingerprint_matches_standalone(self):
-        """Fingerprint on RawFinding matches standalone computation."""
-        raw = _make_raw_finding("Der AN haftet.", ["seg1", "seg2"])
-        expected = build_source_fingerprint("Der AN haftet.", ["seg1", "seg2"])
-        assert raw.source_fingerprint == expected
+    def test_flag_defaults_to_disabled(self):
+        assert ENABLE_TITLE_FALLBACK is False
 
 
-class TestFingerprintSurvivesConsolidation:
-    """A.2 + A.4: Fingerprints survive consolidation; merged findings preserve all."""
+class TestHasDeterministicProvenance:
+    """TopicEvidenceRef.has_deterministic_provenance() helper."""
 
-    def test_single_finding_preserves_fingerprint(self):
-        raw = _make_raw_finding("Unique clause text", ["seg1"])
-        consolidated = konsolidiere([raw])
-        assert len(consolidated) == 1
-        assert consolidated[0].source_fingerprints == [raw.source_fingerprint]
+    def test_with_index(self):
+        ref = TopicEvidenceRef(source_raw_index=0)
+        assert ref.has_deterministic_provenance() is True
 
-    def test_merged_findings_preserve_all_fingerprints(self):
-        """When two similar findings merge, both fingerprints are retained."""
-        raw_a = _make_raw_finding(
-            "Der Auftragnehmer haftet unbeschränkt für Schäden.",
-            ["seg1"], kurzbeschreibung="Unbeschränkte Haftung",
-        )
-        raw_b = _make_raw_finding(
-            "Der Auftragnehmer haftet unbeschränkt für Schäden.",
-            ["seg1"], kurzbeschreibung="Unbeschränkte Haftung identisch",
-        )
-        consolidated = konsolidiere([raw_a, raw_b])
-        assert len(consolidated) == 1
-        cf = consolidated[0]
-        assert len(cf.source_fingerprints) == 2
-        assert raw_a.source_fingerprint in cf.source_fingerprints
-        assert raw_b.source_fingerprint in cf.source_fingerprints
+    def test_with_fingerprint(self):
+        ref = TopicEvidenceRef(source_fingerprint="abc123")
+        assert ref.has_deterministic_provenance() is True
 
-    def test_distinct_findings_keep_separate_fingerprints(self):
-        raw_a = _make_raw_finding("Clause about liability", ["seg1"])
-        raw_b = _make_raw_finding("Clause about audit rights", ["seg2"])
-        consolidated = konsolidiere([raw_a, raw_b])
-        assert len(consolidated) == 2
-        assert consolidated[0].source_fingerprints[0] != consolidated[1].source_fingerprints[0]
+    def test_with_both(self):
+        ref = TopicEvidenceRef(source_raw_index=0, source_fingerprint="abc123")
+        assert ref.has_deterministic_provenance() is True
+
+    def test_with_title_only(self):
+        ref = TopicEvidenceRef(source_title="Some Title")
+        assert ref.has_deterministic_provenance() is False
+
+    def test_completely_empty(self):
+        ref = TopicEvidenceRef()
+        assert ref.has_deterministic_provenance() is False
 
 
-class TestFingerprintBasedLinkage:
-    """A.3: Fingerprint-based linkage succeeds when direct index is missing."""
+class TestDefaultModeNoTitleFallback:
+    """With fallback disabled, title-only refs must NOT resolve."""
 
-    def test_fingerprint_resolution_succeeds(self):
-        textstelle = "Der Auftragnehmer haftet unbeschränkt für alle Schäden."
-        segment_ids = ["seg1"]
-        fp = build_source_fingerprint(textstelle, segment_ids)
-
-        fs = _make_fundstelle("Haftung", textstelle=textstelle, absatz_ids=segment_ids)
-
-        ref = TopicEvidenceRef(
-            finding_nr=None,
-            source_title="Irrelevant Title",
-            source_raw_index=None,
-            source_fingerprint=fp,
-        )
+    def test_title_only_ref_is_unresolved(self):
+        """Ref with source_title but no index/fingerprint → unresolved."""
+        fs = _make_fundstelle("Exact Match Title")
+        ref = TopicEvidenceRef(source_title="Exact Match Title")
         cluster = _make_cluster("Topic", [ref])
 
-        fp_map = {fp: [fs]}
         result, stats = resolve_topic_fundstellen(
             [cluster], [fs],
             raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle=fp_map,
+            fingerprint_to_fundstelle={},
+        )
+
+        assert len(result[0][1]) == 0
+        assert stats.unresolved_references == 1
+        assert stats.exact_title_fallback_matches == 0
+        assert stats.refs_missing_provenance == 1
+
+    def test_zero_title_fallback_matches_in_default_mode(self):
+        """exact_title_fallback_matches is always 0 when flag disabled."""
+        fs = _make_fundstelle("Match")
+        ref = TopicEvidenceRef(source_title="Match")
+        cluster = _make_cluster("Topic", [ref])
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert stats.exact_title_fallback_matches == 0
+
+    def test_index_resolution_still_works(self):
+        fs0 = _make_fundstelle("F1")
+        fs1 = _make_fundstelle("F2")
+        cluster = _make_cluster("Topic", [_make_ref(1, "F1"), _make_ref(2, "F2")])
+
+        raw_map = {0: [fs0], 1: [fs1]}
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs0, fs1],
+            raw_index_to_fundstelle=raw_map,
+        )
+
+        assert len(result[0][1]) == 2
+        assert stats.direct_index_matches == 2
+        assert stats.exact_title_fallback_matches == 0
+
+    def test_fingerprint_resolution_still_works(self):
+        text = "Der Auftragnehmer haftet."
+        fp = build_source_fingerprint(text, ["seg1"])
+        fs = _make_fundstelle("X", textstelle=text, absatz_ids=["seg1"])
+
+        ref = TopicEvidenceRef(source_fingerprint=fp)
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={fp: [fs]},
+        )
+
+        assert len(result[0][1]) == 1
+        assert stats.source_fingerprint_matches == 1
+
+    def test_refs_missing_provenance_counted(self):
+        """Refs without index AND without fingerprint are counted."""
+        ref_good = _make_ref(1, "Good", fingerprint="fp123")
+        ref_bad = TopicEvidenceRef(source_title="Title Only")
+        ref_empty = TopicEvidenceRef()
+
+        cluster = _make_cluster("Topic", [ref_good, ref_bad, ref_empty])
+
+        _, stats = resolve_topic_fundstellen(
+            [cluster], [],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={},
+        )
+
+        assert stats.refs_missing_provenance == 2
+        assert stats.total_references == 3
+
+
+class TestFingerprintResolution:
+    """Fingerprint-based resolution paths."""
+
+    def test_fingerprint_succeeds_when_index_missing(self):
+        text = "Unique clause text."
+        fp = build_source_fingerprint(text, ["seg1"])
+        fs = _make_fundstelle("X", textstelle=text, absatz_ids=["seg1"])
+
+        ref = TopicEvidenceRef(source_fingerprint=fp, source_raw_index=None)
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={fp: [fs]},
         )
 
         assert len(result[0][1]) == 1
         assert stats.source_fingerprint_matches == 1
         assert stats.direct_index_matches == 0
-        assert stats.exact_title_fallback_matches == 0
 
-    def test_fingerprint_resolution_preferred_over_title(self):
-        """Fingerprint match should be used before title fallback."""
-        textstelle = "Specific clause text here."
-        fp = build_source_fingerprint(textstelle, ["seg1"])
+    def test_ambiguous_fingerprint_not_auto_linked(self):
+        fp = build_source_fingerprint("same text", ["seg1"])
+        fs_a = _make_fundstelle("A", textstelle="same text", absatz_ids=["seg1"])
+        fs_b = _make_fundstelle("B", textstelle="same text", absatz_ids=["seg1"])
 
-        fs = _make_fundstelle("Same Title", textstelle=textstelle, absatz_ids=["seg1"])
-
-        ref = TopicEvidenceRef(
-            source_title="Same Title",
-            source_raw_index=None,
-            source_fingerprint=fp,
-        )
+        ref = TopicEvidenceRef(source_fingerprint=fp)
         cluster = _make_cluster("Topic", [ref])
 
-        fp_map = {fp: [fs]}
         result, stats = resolve_topic_fundstellen(
-            [cluster], [fs],
+            [cluster], [fs_a, fs_b],
             raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle=fp_map,
+            fingerprint_to_fundstelle={fp: [fs_a, fs_b]},
         )
 
-        assert len(result[0][1]) == 1
-        # Should use fingerprint, NOT title fallback
-        assert stats.source_fingerprint_matches == 1
-        assert stats.exact_title_fallback_matches == 0
+        assert len(result[0][1]) == 0
+        assert stats.ambiguous_fingerprints == 1
+        assert stats.source_fingerprint_matches == 0
+        assert stats.unresolved_references == 1
+
+    def test_fingerprint_collision_count(self):
+        fp_map = {
+            "colliding_fp": [_make_fundstelle("A"), _make_fundstelle("B")],
+            "unique_fp": [_make_fundstelle("C")],
+        }
+        _, stats = resolve_topic_fundstellen(
+            [], [], raw_index_to_fundstelle={}, fingerprint_to_fundstelle=fp_map,
+        )
+        assert stats.fingerprint_collisions == 1
 
 
-class TestDuplicatePreventionWithFingerprints:
-    """A.5: Duplicate evidence refs don't create duplicate linkage."""
+class TestDuplicatePrevention:
+    """Same Fundstelle cannot be assigned to two topics."""
 
-    def test_same_fundstelle_not_assigned_twice(self):
-        fs = _make_fundstelle("Finding 1")
-        fp = build_source_fingerprint(fs.textstelle, fs.absatz_ids)
-
-        c1 = _make_cluster("Topic A", [_make_ref(1, "F1", fingerprint=fp)])
-        c2 = _make_cluster("Topic B", [_make_ref(1, "F1", fingerprint=fp)])
+    def test_duplicate_prevented(self):
+        fs = _make_fundstelle("F1")
+        c1 = _make_cluster("A", [_make_ref(1)])
+        c2 = _make_cluster("B", [_make_ref(1)])
 
         raw_map = {0: [fs]}
-        fp_map = {fp: [fs]}
         result, stats = resolve_topic_fundstellen(
-            [c1, c2], [fs],
-            raw_index_to_fundstelle=raw_map,
-            fingerprint_to_fundstelle=fp_map,
+            [c1, c2], [fs], raw_index_to_fundstelle=raw_map,
         )
 
         assert len(result[0][1]) == 1
@@ -261,74 +283,10 @@ class TestDuplicatePreventionWithFingerprints:
         assert stats.direct_index_matches == 1
 
 
-# =============================================================================
-# B. NEGATIVE / INTEGRITY PATHS
-# =============================================================================
+class TestCompletelyEmptyRef:
+    """Ref with nothing → unresolved."""
 
-class TestFingerprintCollisionHandling:
-    """B.6: Fingerprint collision is handled explicitly, not silently linked."""
-
-    def test_ambiguous_fingerprint_not_auto_linked(self):
-        """Two Fundstelle share the same fingerprint → ambiguous, not linked."""
-        fp = build_source_fingerprint("same text", ["seg1"])
-        fs_a = _make_fundstelle("Finding A", textstelle="same text", absatz_ids=["seg1"])
-        fs_b = _make_fundstelle("Finding B", textstelle="same text", absatz_ids=["seg1"])
-
-        ref = TopicEvidenceRef(
-            finding_nr=None,
-            source_title="Unrelated",
-            source_raw_index=None,
-            source_fingerprint=fp,
-        )
-        cluster = _make_cluster("Topic", [ref])
-
-        fp_map = {fp: [fs_a, fs_b]}
-        result, stats = resolve_topic_fundstellen(
-            [cluster], [fs_a, fs_b],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle=fp_map,
-        )
-
-        # Should NOT resolve via fingerprint (ambiguous)
-        assert stats.ambiguous_fingerprints == 1
-        assert stats.source_fingerprint_matches == 0
-
-    def test_fingerprint_collision_count_in_stats(self):
-        fp = "deadbeef12345678"
-        fs_a = _make_fundstelle("A")
-        fs_b = _make_fundstelle("B")
-
-        fp_map = {fp: [fs_a, fs_b], "unique_fp": [_make_fundstelle("C")]}
-        _, stats = resolve_topic_fundstellen(
-            [], [], raw_index_to_fundstelle={}, fingerprint_to_fundstelle=fp_map,
-        )
-        assert stats.fingerprint_collisions == 1
-
-
-class TestMissingFingerprintAndIndex:
-    """B.7: Missing fingerprint + missing index → unresolved."""
-
-    def test_no_index_no_fingerprint_no_title_match(self):
-        ref = TopicEvidenceRef(
-            finding_nr=99,
-            source_title="Nonexistent Title",
-            source_raw_index=98,
-            source_fingerprint="badfp_12345678",
-        )
-        cluster = _make_cluster("Topic", [ref])
-
-        result, stats = resolve_topic_fundstellen(
-            [cluster], [],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle={},
-        )
-
-        assert len(result[0][1]) == 0
-        assert stats.unresolved_references == 1
-        assert stats.total_references == 1
-
-    def test_completely_empty_ref(self):
-        """A ref with no index, no fingerprint, no title → unresolved."""
+    def test_empty_ref(self):
         ref = TopicEvidenceRef()
         cluster = _make_cluster("Topic", [ref])
 
@@ -340,40 +298,53 @@ class TestMissingFingerprintAndIndex:
 
         assert len(result[0][1]) == 0
         assert stats.unresolved_references == 1
+        assert stats.refs_missing_provenance == 1
 
 
 # =============================================================================
-# C. TRANSITIONAL FALLBACK PATHS
+# B. FALLBACK ENABLED MODE (flag=True)
 # =============================================================================
 
-class TestExactTitleFallback:
-    """C.10-12: Title fallback behavior."""
+class TestTitleFallbackEnabled:
+    """When enable_title_fallback=True, title matching works as before."""
 
-    def test_title_fallback_only_when_index_and_fp_fail(self):
-        """Title fallback triggers only as last resort."""
-        fs = _make_fundstelle("Exact Match Title", textstelle="clause text", absatz_ids=["seg1"])
-
-        ref = TopicEvidenceRef(
-            finding_nr=None,
-            source_title="Exact Match Title",
-            source_raw_index=None,
-            source_fingerprint=None,  # No fingerprint available
-        )
+    def test_title_fallback_works_when_enabled(self):
+        fs = _make_fundstelle("Exact Match Title")
+        ref = TopicEvidenceRef(source_title="Exact Match Title")
         cluster = _make_cluster("Topic", [ref])
 
         result, stats = resolve_topic_fundstellen(
             [cluster], [fs],
             raw_index_to_fundstelle={},
             fingerprint_to_fundstelle={},
+            enable_title_fallback=True,
         )
 
         assert len(result[0][1]) == 1
         assert stats.exact_title_fallback_matches == 1
-        assert stats.direct_index_matches == 0
-        assert stats.source_fingerprint_matches == 0
+        assert stats.refs_missing_provenance == 1  # Still counted as missing prov
 
-    def test_metrics_label_title_fallback_honestly(self):
-        """Stats clearly distinguish title fallback from fingerprint matches."""
+    def test_title_fallback_only_after_index_and_fp_fail(self):
+        """Title fallback should not trigger if fingerprint resolves it."""
+        text = "Specific clause."
+        fp = build_source_fingerprint(text, ["seg1"])
+        fs = _make_fundstelle("Same Title", textstelle=text, absatz_ids=["seg1"])
+
+        ref = TopicEvidenceRef(source_title="Same Title", source_fingerprint=fp)
+        cluster = _make_cluster("Topic", [ref])
+
+        result, stats = resolve_topic_fundstellen(
+            [cluster], [fs],
+            raw_index_to_fundstelle={},
+            fingerprint_to_fundstelle={fp: [fs]},
+            enable_title_fallback=True,
+        )
+
+        assert len(result[0][1]) == 1
+        assert stats.source_fingerprint_matches == 1
+        assert stats.exact_title_fallback_matches == 0
+
+    def test_metrics_honestly_label_fallback(self):
         fs = _make_fundstelle("Title Match")
         ref = TopicEvidenceRef(source_title="Title Match")
         cluster = _make_cluster("Topic", [ref])
@@ -382,93 +353,135 @@ class TestExactTitleFallback:
             [cluster], [fs],
             raw_index_to_fundstelle={},
             fingerprint_to_fundstelle={},
+            enable_title_fallback=True,
         )
 
         d = stats.to_dict()
-        assert "exact_title_fallback_matches" in d
-        assert "source_fingerprint_matches" in d
         assert d["exact_title_fallback_matches"] == 1
         assert d["source_fingerprint_matches"] == 0
+        assert d["refs_missing_provenance"] == 1
 
-    def test_mixed_three_strategy_resolution(self):
-        """All three strategies used in one resolution pass."""
-        text_a = "Clause about liability is very specific."
-        text_b = "Clause about audit rights is different."
+    def test_mixed_three_strategy_with_fallback(self):
+        """All three strategies in one pass when fallback is enabled."""
+        text_a = "Clause about liability."
+        text_b = "Clause about audit rights."
         fp_b = build_source_fingerprint(text_b, ["seg2"])
 
         fs_a = _make_fundstelle("Finding A", textstelle=text_a, absatz_ids=["seg1"])
         fs_b = _make_fundstelle("Finding B", textstelle=text_b, absatz_ids=["seg2"])
-        fs_c = _make_fundstelle("Title Only Match", textstelle="other", absatz_ids=["seg3"])
+        fs_c = _make_fundstelle("Title Only", textstelle="other", absatz_ids=["seg3"])
 
-        ref_by_index = _make_ref(1, "Finding A")
-        ref_by_fp = TopicEvidenceRef(
-            source_title="Irrelevant",
-            source_raw_index=None,
-            source_fingerprint=fp_b,
-        )
-        ref_by_title = TopicEvidenceRef(
-            source_title="Title Only Match",
-            source_raw_index=None,
-            source_fingerprint=None,
-        )
+        ref_index = _make_ref(1, "Finding A")
+        ref_fp = TopicEvidenceRef(source_fingerprint=fp_b)
+        ref_title = TopicEvidenceRef(source_title="Title Only")
 
-        cluster = _make_cluster("Topic", [ref_by_index, ref_by_fp, ref_by_title])
-        raw_map = {0: [fs_a]}
-        fp_map = {fp_b: [fs_b]}
+        cluster = _make_cluster("Topic", [ref_index, ref_fp, ref_title])
 
         result, stats = resolve_topic_fundstellen(
             [cluster], [fs_a, fs_b, fs_c],
-            raw_index_to_fundstelle=raw_map,
-            fingerprint_to_fundstelle=fp_map,
+            raw_index_to_fundstelle={0: [fs_a]},
+            fingerprint_to_fundstelle={fp_b: [fs_b]},
+            enable_title_fallback=True,
         )
 
         assert len(result[0][1]) == 3
         assert stats.direct_index_matches == 1
         assert stats.source_fingerprint_matches == 1
         assert stats.exact_title_fallback_matches == 1
-        assert stats.unresolved_references == 0
+        assert stats.refs_missing_provenance == 1  # ref_title has no index/fp
 
 
 # =============================================================================
-# STRUCTURAL TESTS (preserved from previous test suite)
+# C. REGRESSION / STRUCTURAL TESTS
 # =============================================================================
 
-class TestTopicEvidenceRef:
-    def test_defaults(self):
-        ref = TopicEvidenceRef()
-        assert ref.finding_nr is None
-        assert ref.source_title is None
-        assert ref.source_raw_index is None
-        assert ref.source_fingerprint is None
+class TestSourceFingerprintGeneration:
+    def test_deterministic(self):
+        fp1 = build_source_fingerprint("Der AN haftet.", ["seg1", "seg2"])
+        fp2 = build_source_fingerprint("Der AN haftet.", ["seg1", "seg2"])
+        assert fp1 == fp2
+        assert len(fp1) == 16
 
-    def test_from_llm_output(self):
-        ref = TopicEvidenceRef(
-            finding_nr=3,
-            source_title="Haftungsklausel",
-            source_raw_index=2,
+    def test_segment_order_independent(self):
+        fp1 = build_source_fingerprint("text", ["seg2", "seg1"])
+        fp2 = build_source_fingerprint("text", ["seg1", "seg2"])
+        assert fp1 == fp2
+
+    def test_different_text_different_hash(self):
+        fp1 = build_source_fingerprint("Klausel A", ["seg1"])
+        fp2 = build_source_fingerprint("Klausel B", ["seg1"])
+        assert fp1 != fp2
+
+    def test_different_segments_different_hash(self):
+        fp1 = build_source_fingerprint("same text", ["seg1"])
+        fp2 = build_source_fingerprint("same text", ["seg2"])
+        assert fp1 != fp2
+
+    def test_uses_only_first_200_chars(self):
+        base = "x" * 200
+        fp1 = build_source_fingerprint(base + "AAAA", ["seg1"])
+        fp2 = build_source_fingerprint(base + "BBBB", ["seg1"])
+        assert fp1 == fp2
+
+    def test_case_insensitive(self):
+        fp1 = build_source_fingerprint("Der Auftragnehmer", ["seg1"])
+        fp2 = build_source_fingerprint("der auftragnehmer", ["seg1"])
+        assert fp1 == fp2
+
+    def test_raw_finding_has_fingerprint(self):
+        raw = _make_raw_finding("Der AN haftet.", ["seg1"])
+        assert raw.source_fingerprint
+        assert len(raw.source_fingerprint) == 16
+
+    def test_raw_finding_fingerprint_matches_standalone(self):
+        raw = _make_raw_finding("Der AN haftet.", ["seg1", "seg2"])
+        expected = build_source_fingerprint("Der AN haftet.", ["seg1", "seg2"])
+        assert raw.source_fingerprint == expected
+
+
+class TestFingerprintSurvivesConsolidation:
+    def test_single_preserves(self):
+        raw = _make_raw_finding("Unique clause text", ["seg1"])
+        consolidated = konsolidiere([raw])
+        assert len(consolidated) == 1
+        assert consolidated[0].source_fingerprints == [raw.source_fingerprint]
+
+    def test_merged_preserves_all(self):
+        raw_a = _make_raw_finding(
+            "Der AN haftet unbeschränkt für Schäden.",
+            ["seg1"], kurzbeschreibung="Unbeschränkte Haftung",
         )
-        assert ref.finding_nr == 3
-        assert ref.source_raw_index == 2
-        assert ref.source_fingerprint is None
+        raw_b = _make_raw_finding(
+            "Der AN haftet unbeschränkt für Schäden.",
+            ["seg1"], kurzbeschreibung="Unbeschränkte Haftung identisch",
+        )
+        consolidated = konsolidiere([raw_a, raw_b])
+        assert len(consolidated) == 1
+        cf = consolidated[0]
+        assert len(cf.source_fingerprints) == 2
+        assert raw_a.source_fingerprint in cf.source_fingerprints
+        assert raw_b.source_fingerprint in cf.source_fingerprints
+
+    def test_distinct_keep_separate(self):
+        raw_a = _make_raw_finding("Clause about liability", ["seg1"])
+        raw_b = _make_raw_finding("Clause about audit rights", ["seg2"])
+        consolidated = konsolidiere([raw_a, raw_b])
+        assert len(consolidated) == 2
+        assert consolidated[0].source_fingerprints[0] != consolidated[1].source_fingerprints[0]
 
 
 class TestParseClusters:
     def test_basic_parsing(self):
-        items = [
-            {
-                "topic_title": "Haftungsrisiken",
-                "category": "Haftung",
-                "risk_level": "Hoch",
-                "beschreibung": "Beschreibung",
-                "evidence": [
-                    {"finding_nr": 1, "ursprungstitel": "Titel A"},
-                    {"finding_nr": 3, "ursprungstitel": "Titel B"},
-                ],
-            }
-        ]
+        items = [{
+            "topic_title": "Haftungsrisiken", "category": "Haftung",
+            "risk_level": "Hoch", "beschreibung": "Beschreibung",
+            "evidence": [
+                {"finding_nr": 1, "ursprungstitel": "Titel A"},
+                {"finding_nr": 3, "ursprungstitel": "Titel B"},
+            ],
+        }]
         clusters = _parse_clusters(items)
         assert clusters is not None
-        assert len(clusters) == 1
         c = clusters[0]
         assert len(c.evidence_refs) == 2
         assert c.evidence_refs[0].finding_nr == 1
@@ -477,34 +490,25 @@ class TestParseClusters:
         assert c.evidence_refs[1].source_raw_index == 2
 
     def test_missing_finding_nr(self):
-        items = [
-            {
-                "topic_title": "Test",
-                "category": "Cat",
-                "risk_level": "Mittel",
-                "beschreibung": "Desc",
-                "evidence": [{"ursprungstitel": "Only Title"}],
-            }
-        ]
+        items = [{
+            "topic_title": "Test", "category": "Cat",
+            "risk_level": "Mittel", "beschreibung": "Desc",
+            "evidence": [{"ursprungstitel": "Only Title"}],
+        }]
         clusters = _parse_clusters(items)
-        assert clusters is not None
         ref = clusters[0].evidence_refs[0]
         assert ref.finding_nr is None
         assert ref.source_title == "Only Title"
         assert ref.source_raw_index is None
+        assert ref.has_deterministic_provenance() is False
 
     def test_empty_evidence_skipped(self):
-        items = [
-            {
-                "topic_title": "Test",
-                "category": "Cat",
-                "risk_level": "Mittel",
-                "beschreibung": "Desc",
-                "evidence": [{"ursprungstitel": "", "finding_nr": None}, {}],
-            }
-        ]
+        items = [{
+            "topic_title": "Test", "category": "Cat",
+            "risk_level": "Mittel", "beschreibung": "Desc",
+            "evidence": [{"ursprungstitel": "", "finding_nr": None}, {}],
+        }]
         clusters = _parse_clusters(items)
-        assert clusters is not None
         assert len(clusters[0].evidence_refs) == 0
 
 
@@ -521,12 +525,9 @@ class TestMergeInto:
 
 
 class TestReassignSingles:
-    def test_reassigns_single_evidence_refs(self):
-        single = _make_cluster("Haftung", [_make_ref(1, "Finding 1")])
-        multi = _make_cluster(
-            "Haftungsrisiken",
-            [_make_ref(2, "Finding 2"), _make_ref(3, "Finding 3")],
-        )
+    def test_reassigns(self):
+        single = _make_cluster("Haftung", [_make_ref(1, "F1")])
+        multi = _make_cluster("Haftungsrisiken", [_make_ref(2, "F2"), _make_ref(3, "F3")])
         clusters = _reassign_singles([single, multi])
         assert len(clusters) == 1
         assert len(clusters[0].evidence_refs) == 3
@@ -534,11 +535,8 @@ class TestReassignSingles:
 
 class TestDeduplicateEvidence:
     def test_dedup_by_finding_nr(self):
-        ref1 = _make_ref(1, "Finding 1")
-        ref1_dup = _make_ref(1, "Finding 1")
-        ref2 = _make_ref(2, "Finding 2")
-        c1 = _make_cluster("High Risk", [ref1, ref2], risikostufe="Hoch")
-        c2 = _make_cluster("Low Risk", [ref1_dup], risikostufe="Niedrig")
+        c1 = _make_cluster("High", [_make_ref(1), _make_ref(2)], risikostufe="Hoch")
+        c2 = _make_cluster("Low", [_make_ref(1)], risikostufe="Niedrig")
         result = _deduplicate_evidence([c1, c2])
         assert len(result[0].evidence_refs) == 2
         assert len(result[1].evidence_refs) == 0
@@ -559,22 +557,24 @@ class TestLinkageStats:
         stats = LinkageStats(
             direct_index_matches=5,
             source_fingerprint_matches=3,
-            exact_title_fallback_matches=1,
+            exact_title_fallback_matches=0,
             ambiguous_fingerprints=1,
             unresolved_references=2,
             duplicate_reference_collisions=0,
             fingerprint_collisions=1,
-            total_references=12,
+            refs_missing_provenance=2,
+            total_references=13,
         )
         d = stats.to_dict()
         assert d["direct_index_matches"] == 5
         assert d["source_fingerprint_matches"] == 3
-        assert d["exact_title_fallback_matches"] == 1
+        assert d["exact_title_fallback_matches"] == 0
         assert d["ambiguous_fingerprints"] == 1
         assert d["unresolved_references"] == 2
         assert d["duplicate_reference_collisions"] == 0
         assert d["fingerprint_collisions"] == 1
-        assert d["total_references"] == 12
+        assert d["refs_missing_provenance"] == 2
+        assert d["total_references"] == 13
         # Old field names must not appear
         assert "fingerprint_matches" not in d
         assert "exact_title_matches" not in d
@@ -582,10 +582,8 @@ class TestLinkageStats:
         assert "total_evidences" not in d
 
 
-class TestBuildFingerprint:
-    """Tests for the _build_fingerprint wrapper in themen_cluster.py."""
-
-    def test_wrapper_delegates_to_canonical(self):
+class TestBuildFingerprintWrapper:
+    def test_delegates_to_canonical(self):
         fp_wrapper = _build_fingerprint("some text", ["seg1", "seg2"])
         fp_canonical = build_source_fingerprint("some text", ["seg1", "seg2"])
         assert fp_wrapper == fp_canonical

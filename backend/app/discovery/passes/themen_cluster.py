@@ -109,6 +109,22 @@ WICHTIG:
 - Alle Texte in den Feldern topic_title, beschreibung und category MÜSSEN deutsch sein."""
 
 
+# Feature flag: controls whether exact-title equality is used as a last-resort
+# fallback during evidence linkage resolution (Strategy 3).
+#
+# Default: False (disabled). Title matching uses LLM-generated kurzbeschreibung,
+# which is a display artifact — not a reliable identity layer. With fingerprint
+# and index coverage now in place, this fallback should not be needed.
+#
+# Set to True only for diagnostic purposes or if migrating legacy data where
+# fingerprint coverage is incomplete.
+#
+# Condition for permanent removal: once telemetry confirms that
+# refs_missing_provenance == 0 across multiple production runs, delete
+# this flag and all Strategy 3 code.
+ENABLE_TITLE_FALLBACK: bool = False
+
+
 @dataclass
 class TopicEvidenceRef:
     """Structured reference from a topic to a raw finding.
@@ -119,11 +135,20 @@ class TopicEvidenceRef:
     Resolution priority during linkage:
     1. source_raw_index → raw_index_to_fundstelle (direct provenance)
     2. source_fingerprint → fingerprint_to_fundstelle (deterministic hash match)
-    3. source_title → kurzbeschreibung equality (transitional fallback, to be removed)
+    3. source_title → kurzbeschreibung equality (DISABLED by default via
+       ENABLE_TITLE_FALLBACK flag; transitional only, scheduled for removal)
+
+    A ref is considered to have valid provenance if it carries at least one of:
+    - source_raw_index (Strategy 1)
+    - source_fingerprint (Strategy 2)
+    Refs lacking both are counted as refs_missing_provenance in LinkageStats.
+    Title matching is NOT considered valid provenance.
     """
     # 1-based finding number from the LLM input list (maps to all_raw_findings)
     finding_nr: int | None = None
-    # Original kurzbeschreibung title as returned by the LLM (transitional fallback only)
+    # Original kurzbeschreibung title as returned by the LLM.
+    # NOT a reliable identity mechanism. Retained for diagnostics and
+    # as transitional fallback (disabled by default via ENABLE_TITLE_FALLBACK).
     source_title: str | None = None
     # 0-based index into the raw findings list (= finding_nr - 1 when present)
     source_raw_index: int | None = None
@@ -132,6 +157,13 @@ class TopicEvidenceRef:
     # pre-computed fingerprint. Used as Strategy 2 during linkage resolution.
     # See base.build_source_fingerprint() for hash construction details.
     source_fingerprint: str | None = None
+
+    def has_deterministic_provenance(self) -> bool:
+        """Return True if this ref has at least one deterministic identifier.
+
+        Title-only refs do NOT count as having provenance.
+        """
+        return self.source_raw_index is not None or self.source_fingerprint is not None
 
 
 @dataclass
@@ -592,11 +624,14 @@ class LinkageStats:
     - direct_index_matches: resolved via raw finding index provenance (best)
     - source_fingerprint_matches: resolved via deterministic source hash (good)
     - exact_title_fallback_matches: resolved via kurzbeschreibung equality
-      (transitional — to be removed once fingerprint coverage is complete)
+      (transitional — disabled by default, controlled by ENABLE_TITLE_FALLBACK)
     - ambiguous_fingerprints: fingerprint matched multiple Fundstelle candidates
     - unresolved_references: could not resolve by any strategy
     - duplicate_reference_collisions: target Fundstelle already assigned to another topic
     - fingerprint_collisions: number of fingerprints mapping to >1 Fundstelle
+    - refs_missing_provenance: refs with neither source_raw_index nor source_fingerprint;
+      these refs have no deterministic identity and will be unresolved unless
+      ENABLE_TITLE_FALLBACK is True
     - total_references: total evidence refs processed
     """
     direct_index_matches: int = 0
@@ -606,6 +641,7 @@ class LinkageStats:
     unresolved_references: int = 0
     duplicate_reference_collisions: int = 0
     fingerprint_collisions: int = 0
+    refs_missing_provenance: int = 0
     total_references: int = 0
 
     def to_dict(self) -> dict:
@@ -617,6 +653,7 @@ class LinkageStats:
             "unresolved_references": self.unresolved_references,
             "duplicate_reference_collisions": self.duplicate_reference_collisions,
             "fingerprint_collisions": self.fingerprint_collisions,
+            "refs_missing_provenance": self.refs_missing_provenance,
             "total_references": self.total_references,
         }
 
@@ -635,13 +672,21 @@ def resolve_topic_fundstellen(
     fundstellen: list,
     raw_index_to_fundstelle: dict[int, list] | None = None,
     fingerprint_to_fundstelle: dict[str, list] | None = None,
+    *,
+    enable_title_fallback: bool | None = None,
 ) -> tuple[list[tuple[TopicCluster, list]], LinkageStats]:
     """Resolve topic evidence to persisted Fundstelle objects using deterministic linkage.
 
     Resolution order (no fuzzy matching):
     1. Direct index lookup via source_raw_index → raw_index_to_fundstelle
     2. Source fingerprint lookup via source_fingerprint → fingerprint_to_fundstelle
-    3. Exact title equality as transitional last-resort fallback (to be removed)
+    3. (Only if enable_title_fallback is True) Exact title equality — transitional,
+       disabled by default via the module-level ENABLE_TITLE_FALLBACK flag.
+    4. Otherwise: unresolved.
+
+    Title matching is NOT a reliable identity mechanism. It uses LLM-generated
+    kurzbeschreibung which is a display artifact subject to wording drift.
+    Fingerprint + provenance are the only supported identity layers.
 
     Ambiguity handling:
     - If a fingerprint maps to multiple Fundstelle, the match is counted as
@@ -655,10 +700,14 @@ def resolve_topic_fundstellen(
             list of Fundstelle objects (through consolidation). Built by orchestrator.
         fingerprint_to_fundstelle: Mapping from source fingerprint to list of
             Fundstelle objects sharing that fingerprint. Built by orchestrator.
+        enable_title_fallback: Override for the module-level ENABLE_TITLE_FALLBACK
+            flag. If None, uses the module-level default. Primarily for testing.
 
     Returns:
         Tuple of (resolved pairs, linkage statistics)
     """
+    use_title_fallback = enable_title_fallback if enable_title_fallback is not None else ENABLE_TITLE_FALLBACK
+
     stats = LinkageStats()
 
     # Count fingerprint collisions for telemetry
@@ -675,6 +724,11 @@ def resolve_topic_fundstellen(
     for ci, cluster in enumerate(clusters):
         for ref in cluster.evidence_refs:
             stats.total_references += 1
+
+            # Track provenance coverage
+            if not ref.has_deterministic_provenance():
+                stats.refs_missing_provenance += 1
+
             resolved_fs = None
 
             # --- Strategy 1: Direct index lookup (best — provenance-based) ---
@@ -701,15 +755,16 @@ def resolve_topic_fundstellen(
                     stats.ambiguous_fingerprints += 1
                     logger.warning(
                         f"Topic '{cluster.titel}': fingerprint {ref.source_fingerprint} "
-                        f"matches {len(available)} Fundstelle — ambiguous, skipping fingerprint strategy"
+                        f"matches {len(available)} Fundstelle — ambiguous, skipping"
                     )
 
-            # --- Strategy 3: Exact title equality (transitional fallback) ---
+            # --- Strategy 3: Exact title equality (DISABLED by default) ---
+            # Controlled by ENABLE_TITLE_FALLBACK flag.
             # WARNING: This uses LLM-generated kurzbeschreibung for matching.
-            # It is NOT a robust identity mechanism and exists only as a
-            # transitional fallback until fingerprint coverage is complete.
-            # To remove: delete this block once all evidence refs carry fingerprints.
-            if resolved_fs is None and ref.source_title:
+            # It is NOT a robust identity mechanism. Title is a display artifact.
+            # To remove permanently: delete this block and the ENABLE_TITLE_FALLBACK
+            # flag once telemetry confirms refs_missing_provenance == 0.
+            if use_title_fallback and resolved_fs is None and ref.source_title:
                 title_norm = ref.source_title.lower().strip()
                 for fs in fundstellen:
                     if fs.id in assigned_fs_ids:
@@ -719,7 +774,7 @@ def resolve_topic_fundstellen(
                         stats.exact_title_fallback_matches += 1
                         logger.debug(
                             f"Topic '{cluster.titel}': Evidence resolved via title fallback "
-                            f"(transitional): '{ref.source_title[:60]}'"
+                            f"(transitional, flag-enabled): '{ref.source_title[:60]}'"
                         )
                         break
 
@@ -728,8 +783,10 @@ def resolve_topic_fundstellen(
                 stats.unresolved_references += 1
                 label = ref.source_title[:60] if ref.source_title else f"nr={ref.finding_nr}"
                 logger.warning(
-                    f"Topic '{cluster.titel}': Evidence '{label}' "
-                    f"konnte nicht aufgelöst werden (kein Index-, Fingerprint- oder Titel-Match)"
+                    f"Topic '{cluster.titel}': Evidence '{label}' unresolved "
+                    f"(index={'yes' if ref.source_raw_index is not None else 'no'}, "
+                    f"fp={'yes' if ref.source_fingerprint else 'no'}, "
+                    f"title_fb={'enabled' if use_title_fallback else 'disabled'})"
                 )
                 continue
 
@@ -750,13 +807,14 @@ def resolve_topic_fundstellen(
         result.append((cluster, cluster_fundstellen.get(ci, [])))
 
     logger.info(
-        f"Evidence linkage: {stats.direct_index_matches} by index, "
-        f"{stats.source_fingerprint_matches} by fingerprint, "
-        f"{stats.exact_title_fallback_matches} by title fallback, "
-        f"{stats.ambiguous_fingerprints} ambiguous FP, "
+        f"Evidence linkage: {stats.direct_index_matches} index, "
+        f"{stats.source_fingerprint_matches} fingerprint, "
+        f"{stats.exact_title_fallback_matches} title-fb, "
+        f"{stats.ambiguous_fingerprints} ambiguous, "
         f"{stats.unresolved_references} unresolved, "
-        f"{stats.duplicate_reference_collisions} duplicates "
-        f"(total: {stats.total_references})"
+        f"{stats.refs_missing_provenance} missing-prov, "
+        f"{stats.duplicate_reference_collisions} dup "
+        f"(total: {stats.total_references}, title_fb={'on' if use_title_fallback else 'off'})"
     )
     return result, stats
 

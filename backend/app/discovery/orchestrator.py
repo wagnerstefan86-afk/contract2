@@ -484,17 +484,51 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             fp = build_source_fingerprint(fs.textstelle, fs.absatz_ids)
             fingerprint_to_fundstelle.setdefault(fp, []).append(fs)
 
-        # Enrich TopicEvidenceRef.source_fingerprint from raw finding data.
-        # This attaches the fingerprint BEFORE resolution, as pre-existing
-        # provenance metadata — not as a post-hoc decoration.
+        # --- Enrich TopicEvidenceRef provenance BEFORE resolution ---
+        # Two-pass enrichment ensures maximum fingerprint coverage:
+        # Pass 1: Populate source_fingerprint from source_raw_index (direct).
+        # Pass 2: For refs still missing both identifiers, attempt to recover
+        #         source_raw_index and source_fingerprint by matching source_title
+        #         against known raw findings. This closes the gap where the LLM
+        #         omits finding_nr but provides ursprungstitel.
+        # After enrichment, refs with neither index nor fingerprint will be
+        # counted as refs_missing_provenance and remain unresolved unless
+        # the title fallback flag is enabled.
+
+        # Build title→raw_index lookup for Pass 2 (kurzbeschreibung is LLM-generated
+        # but is deterministically set at RawFinding creation, not editable later)
+        title_to_raw_index: dict[str, int] = {}
+        for idx, raw in enumerate(all_raw_findings):
+            key = raw.kurzbeschreibung.lower().strip()
+            if key and key not in title_to_raw_index:
+                title_to_raw_index[key] = idx
+
         for cluster in topic_clusters:
             for ref in cluster.evidence_refs:
+                # Pass 1: Direct index → fingerprint
                 if ref.source_fingerprint:
-                    continue  # Already populated
+                    continue
                 if ref.source_raw_index is not None and ref.source_raw_index < len(all_raw_findings):
                     raw = all_raw_findings[ref.source_raw_index]
                     if raw.source_fingerprint:
                         ref.source_fingerprint = raw.source_fingerprint
+                    continue
+
+                # Pass 2: Recover index + fingerprint from title (one-time enrichment).
+                # This does NOT use title for linkage resolution — it uses title
+                # to recover the deterministic identifiers that the LLM failed to
+                # provide, so that resolution can proceed via Strategy 1 or 2.
+                if ref.source_title:
+                    title_key = ref.source_title.lower().strip()
+                    raw_idx = title_to_raw_index.get(title_key)
+                    if raw_idx is not None:
+                        raw = all_raw_findings[raw_idx]
+                        ref.source_raw_index = raw_idx
+                        ref.source_fingerprint = raw.source_fingerprint
+                        logger.debug(
+                            f"Enrichment: recovered index={raw_idx} + fingerprint "
+                            f"for ref '{ref.source_title[:50]}' via title→raw lookup"
+                        )
 
         resolved, linkage_stats = resolve_topic_fundstellen(
             topic_clusters, persisted_fundstellen,
@@ -543,10 +577,11 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
 
         await _log(db, aid, vid,
                    f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
-                   f"Linkage: {linkage_stats.direct_index_matches} by index, "
-                   f"{linkage_stats.source_fingerprint_matches} by fingerprint, "
-                   f"{linkage_stats.exact_title_fallback_matches} by title fallback, "
-                   f"{linkage_stats.unresolved_references} unresolved.",
+                   f"Linkage: {linkage_stats.direct_index_matches} index, "
+                   f"{linkage_stats.source_fingerprint_matches} fp, "
+                   f"{linkage_stats.exact_title_fallback_matches} title-fb, "
+                   f"{linkage_stats.unresolved_references} unresolved, "
+                   f"{linkage_stats.refs_missing_provenance} missing-prov.",
                    details=metriken)
 
     # --- Step 7: Final Editorial Pass ---
