@@ -619,14 +619,60 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                     thema.final_selected = False
                     thema.final_verwerfungsgrund = "Vom LLM nicht adressiert"
 
+            # --- Evidence integrity check ---
+            # A final_selected theme MUST have ≥1 linked Fundstelle.
+            # If fuzzy matching failed, the junction table has zero rows.
+            themes_dropped_no_evidence = 0
+            for idx, thema in enumerate(persisted_themen):
+                if not thema.final_selected:
+                    continue
+                linked_fs = resolved_fs_map.get(idx, [])
+                if len(linked_fs) == 0:
+                    # Fallback: try to assign the highest-severity unlinked Fundstelle
+                    _SEVERITY_ORDER = {"Kritisch": 0, "Hoch": 1, "Mittel": 2, "Niedrig": 3, "Hinweis": 4}
+                    assigned_fs_ids = {fs.id for _, fsl in resolved_fs_map.items() for fs in fsl}
+                    unlinked = [
+                        fs for fs in persisted_fundstellen
+                        if fs.id not in assigned_fs_ids
+                    ]
+                    unlinked.sort(key=lambda f: _SEVERITY_ORDER.get(f.risikostufe, 9))
+                    if unlinked:
+                        fallback_fs = unlinked[0]
+                        junction_rows_extra = [{
+                            "risikothema_id": thema.id,
+                            "fundstelle_id": fallback_fs.id,
+                        }]
+                        await db.execute(risikothema_fundstellen.insert(), junction_rows_extra)
+                        resolved_fs_map[idx] = [fallback_fs]
+                        logger.warning(
+                            f"RisikoThema '{thema.titel}' (id={thema.id}) hatte 0 Evidenzen. "
+                            f"Fallback: Fundstelle {fallback_fs.id} zugewiesen."
+                        )
+                    else:
+                        # No recovery possible — drop from final selection
+                        thema.final_selected = False
+                        thema.final_verwerfungsgrund = "Keine zugeordneten Evidenzen"
+                        themes_dropped_no_evidence += 1
+                        logger.warning(
+                            f"RisikoThema '{thema.titel}' (id={thema.id}, analyse_id={thema.analyse_id}) "
+                            f"final_selected zurückgesetzt: 0 Evidenzen, kein Fallback verfügbar."
+                        )
+
             await db.flush()
 
-            anzahl_finale = len(editorial_result.finale_themen)
+            # Recount after evidence integrity check
+            anzahl_finale = sum(1 for t in persisted_themen if t.final_selected)
             anzahl_verworfen = len(persisted_themen) - anzahl_finale
+            themes_with_evidence = sum(
+                1 for idx, t in enumerate(persisted_themen)
+                if t.final_selected and len(resolved_fs_map.get(idx, [])) > 0
+            )
             auswertung["final_editorial"] = {
                 "anzahl_cluster_themen_vorher": len(persisted_themen),
                 "anzahl_finale_themen_nachher": anzahl_finale,
                 "anzahl_verworfene_themen": anzahl_verworfen,
+                "themes_with_evidence": themes_with_evidence,
+                "themes_dropped_no_evidence": themes_dropped_no_evidence,
                 "dauer_sekunden": dur_editorial,
                 "finale_themen": [
                     {"titel": ft.titel, "kategorie": ft.kategorie, "risikostufe": ft.risikostufe}
@@ -671,11 +717,33 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         1 for fs in persisted_fundstellen
         if fs.scope_text or fs.textstelle
     )
-    # Count kernthemen (final_selected themes)
+    # Count kernthemen (final_selected themes) — use actual DB state after integrity check
     kernthemen_count = 0
     try:
-        if topic_clusters and editorial_result:
-            kernthemen_count = len(editorial_result.finale_themen)
+        if topic_clusters and persisted_themen:
+            kernthemen_count = sum(1 for t in persisted_themen if t.final_selected)
+    except NameError:
+        pass
+
+    # --- Pipeline invariant check ---
+    # Verify no final_selected theme has zero evidences
+    try:
+        if topic_clusters and persisted_themen:
+            invalid = [
+                t for idx, t in enumerate(persisted_themen)
+                if t.final_selected and len(resolved_fs_map.get(idx, [])) == 0
+            ]
+            if invalid:
+                titles = [t.titel for t in invalid]
+                logger.error(
+                    f"INVARIANT VIOLATION: {len(invalid)} final themes without evidences: {titles}"
+                )
+                # Enforce: drop them rather than let invalid data through
+                for t in invalid:
+                    t.final_selected = False
+                    t.final_verwerfungsgrund = "Invariant-Check: 0 Evidenzen"
+                kernthemen_count -= len(invalid)
+                await db.flush()
     except NameError:
         pass
 

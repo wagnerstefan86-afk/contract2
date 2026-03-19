@@ -119,6 +119,9 @@ def _themen_to_gruppen(themen: list[RisikoThema],
             ) if total_fundstellen else 0,
             "gruppen_details": [],
             "quelle": "consolidated_themes",
+            "themes_total": len(themen),
+            "themes_with_evidence": len(gruppen),
+            "themes_dropped_no_evidence": len(themen) - len(gruppen),
         },
     }
 
@@ -199,8 +202,12 @@ async def _load_final_themen(db: AsyncSession,
     alle = list(result.scalars().all())
 
     # Prefer final_selected themes (editorial pass output)
-    final = [t for t in alle if t.final_selected]
-    return final if final else alle
+    # Enforce invariant: only return themes that have ≥1 linked Fundstelle
+    final = [t for t in alle if t.final_selected and len(t.fundstellen) > 0]
+    if final:
+        return final
+    # Fallback: no final themes with evidence — return all themes that have evidence
+    return [t for t in alle if len(t.fundstellen) > 0]
 
 
 @router.get("/vertrag/{vertrag_id}/gruppiert")
