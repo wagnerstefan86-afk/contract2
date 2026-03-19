@@ -89,6 +89,10 @@ class FinalesThemaResponse(BaseModel):
     alternativformulierung: str
     bieterfrage: str
     verhandlungsargumente: list[str]
+    problem_summary: str = ""
+    impact: list[str] = []
+    recommendation: list[str] = []
+    negotiation: list[str] = []
     fundstellen: list[FinalesThemaFundstelleResponse]
     evidences: list[EvidenceItem] = []
     sortierung: int

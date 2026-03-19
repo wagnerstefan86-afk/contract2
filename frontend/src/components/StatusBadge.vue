@@ -11,6 +11,7 @@ const props = defineProps<{ status: string }>();
 
 const farbe = computed(() => {
   const s = props.status;
+  if (s === "Kritisch") return "#991b1b";
   if (s === "Hoch" || s === "Fehler" || s === "Fehlgeschlagen") return "#dc2626";
   if (s === "Mittel" || s === "Warnung") return "#f59e0b";
   if (s === "Niedrig" || s === "Bestätigt" || s === "Abgeschlossen" || s === "Analysiert") return "#16a34a";

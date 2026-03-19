@@ -54,6 +54,19 @@ export interface FundstelleDetail {
   position_im_text: number;
 }
 
+export interface ThemaEditorialContext {
+  thema_id: string | null;
+  titel: string;
+  problem_summary: string;
+  impact: string[];
+  recommendation: string[];
+  negotiation: string[];
+  warum_verhandlungsrelevant: string;
+  alternativformulierung: string;
+  bieterfrage: string;
+  verhandlungsargumente: string[];
+}
+
 export interface Fundstelle {
   id: string;
   analyse_id: string;
@@ -70,6 +83,7 @@ export interface Fundstelle {
   erstellt_am: string;
   detail: FundstelleDetail | null;
   zusammenfuehrung: Record<string, unknown> | null;
+  thema_editorial: ThemaEditorialContext | null;
   // Paragraph-level evidence fields
   scope_type: string | null;
   scope_text: string | null;
@@ -185,6 +199,10 @@ export interface FinalesThema {
   alternativformulierung: string;
   bieterfrage: string;
   verhandlungsargumente: string[];
+  problem_summary: string;
+  impact: string[];
+  recommendation: string[];
+  negotiation: string[];
   fundstellen: FinalesThemaFundstelle[];
   sortierung: number;
 }

@@ -68,26 +68,53 @@ EVIDENZ-REDUKTION:
 - NICHT: 7, 10 oder 15 Evidenzen pro Thema
 
 TITEL-REGELN (KRITISCH):
-- 5 bis 12 Wörter, verhandlungstauglich, das konkrete Problem benennend.
+- Maximal 8 Wörter, kurz und abstrakt.
+- Der Titel ist KEIN Satz. Er ist ein Schlagwort-Titel.
 - Der Titel muss den Risikocharakter enthalten: einseitig / unbegrenzt / unklar / offen / dynamisch.
+- VERBOTEN: Titel mit mehr als 8 Wörtern.
+- VERBOTEN: Titel die wie Sätze klingen.
 - VERBOTEN: Ein-Wort-Titel ("Haftung"), reine Kategorien ("Compliance"), vage Labels ("Audit").
 - VERBOTEN: Englische Titel oder englisch-deutsche Mischformen.
-- GUT: "Weitreichendes Weisungsrecht ohne belastbare Zumutbarkeitsgrenzen"
-- GUT: "Unbegrenzte Haftungsdurchreichung für Subunternehmer"
-- GUT: "Dynamische regulatorische Anpassungspflichten ohne klare Kostenregelung"
+- GUT: "Unbegrenzte Haftungsdurchreichung"
+- GUT: "Einseitiges Weisungsrecht ohne Grenzen"
+- GUT: "Dynamische Anpassungspflichten ohne Kosten"
+- GUT: "Unklarer Leistungsumfang"
+- SCHLECHT: "Weitreichendes Weisungsrecht ohne belastbare Zumutbarkeitsgrenzen und klare Abgrenzung"
 - SCHLECHT: "Compliance", "Haftung", "Weisungsrecht", "Audit"
+
+AUSGABEFORMAT — STRUKTURIERTE FELDER (ZWINGEND):
+
+Jedes finale Thema MUSS diese strukturierten Felder enthalten:
+
+problem_summary: GENAU 1 Satz. Was ist das Problem? Maximal 20 Wörter.
+NICHT: Lange Erklärungen. NICHT: Mehrere Sätze.
+GUT: "Der AN haftet unbeschränkt für alle Schäden ohne Deckelung."
+SCHLECHT: "Die Klausel regelt die Haftung des AN. Diese ist problematisch, weil..."
+
+impact: GENAU 2–4 Aufzählungspunkte. Welche konkreten Auswirkungen hat das Problem?
+Jeder Punkt: Maximal 12 Wörter. Kurz, präzise, kein Fülltext.
+GUT: ["Offenes Kostenrisiko bei regulatorischen Änderungen", "Keine Zumutbarkeitsgrenzen definiert"]
+SCHLECHT: ["Dies könnte zu Problemen führen", "Sollte geprüft werden"]
+
+recommendation: GENAU 2–4 Aufzählungspunkte. Was soll der Prüfer tun?
+MUSS IMMER befüllt sein. Wenn unsicher: Best-Practice-Empfehlungen geben.
+Jeder Punkt: Maximal 12 Wörter. Konkret und handlungsorientiert.
+GUT: ["Haftungsdeckelung auf Auftragswert begrenzen", "Zumutbarkeitsklausel ergänzen"]
+
+negotiation: GENAU 2–4 Aufzählungspunkte. Konkrete Verhandlungshebel.
+MUSS IMMER befüllt sein. Wenn unsicher: Standard-Verhandlungsargumente geben.
+Jeder Punkt: Maximal 12 Wörter. Operativ, nicht abstrakt.
+GUT: ["Marktübliche Haftungsdeckelung als Gegenvorschlag", "Verweis auf Branchenstandard ISO 27001"]
 
 KURZBESCHREIBUNG — Muss 2-3 Sätze enthalten:
 1. Was bewirkt die Klausel konkret? (Klauselwirkung)
 2. Welches konkrete Risiko entsteht daraus? (Praktisches Risiko)
 3. Warum ist dies in einer Vertragsverhandlung relevant? (Verhandlungsimplikation)
 NICHT: Titel wiederholen. NICHT: Vage Füllsätze. NICHT: "Dies könnte zu Problemen führen."
-Beispiel: "Der Auftragnehmer muss regulatorische Änderungen laufend umsetzen, ohne dass Kosten, Fristen oder Zumutbarkeitsgrenzen klar geregelt sind. Dadurch entsteht ein offenes Anpassungs- und Kostenrisiko."
 
 WARUM_VERHANDLUNGSRELEVANT — Muss konkret beantworten:
 "Warum ist das in einer Vertragsverhandlung konkret wichtig?"
 NICHT: Abstrakte KI-Kommentare wie "sollte geprüft werden" oder "könnte relevant sein".
-GUT: "Die Klausel erlaubt faktisch einseitige Leistungserweiterungen. Ohne klare Begrenzung kann der Auftraggeber zusätzliche Anforderungen durchsetzen, ohne dass Vergütung oder Zumutbarkeit sauber nachgezogen werden."
 
 ALTERNATIVFORMULIERUNG — Kurz, verwendbar, klauselartig:
 NICHT: Essay-Stil oder lange Erklärungen.
@@ -96,7 +123,6 @@ GUT: "Der Auftragnehmer kann Weisungen ablehnen, soweit diese über den vertragl
 BIETERFRAGE — Konkret und beantwortbar:
 NICHT: Vage Meta-Fragen wie "Wie sehen Sie das?"
 GUT: "Ist der Auftraggeber bereit, eine Haftungsdeckelung von [X] EUR zu vereinbaren?"
-GUT: "Kann die Weisungsbefugnis auf den vertraglich definierten Leistungsumfang beschränkt werden?"
 
 VERHANDLUNGSARGUMENTE — Präzise Aufzählungspunkte mit konkreten Hebeln:
 - Operativer Mehraufwand / Personalbelastung
@@ -113,9 +139,13 @@ AUSGABEFORMAT — Antworte AUSSCHLIESSLICH mit einem JSON-Objekt:
   "finale_themen": [
     {
       "quell_thema_index": 0,
-      "titel": "Verhandlungstauglicher Titel (5-12 Wörter, deutsch, spezifisch)",
+      "titel": "Kurzer Titel (max 8 Wörter)",
       "kategorie": "Kategorie",
       "risikostufe": "Hoch | Mittel | Niedrig",
+      "problem_summary": "Genau 1 Satz: Was ist das Problem? (max 20 Wörter)",
+      "impact": ["Auswirkung 1 (max 12 Wörter)", "Auswirkung 2", "Auswirkung 3"],
+      "recommendation": ["Empfehlung 1 (max 12 Wörter)", "Empfehlung 2"],
+      "negotiation": ["Verhandlungshebel 1 (max 12 Wörter)", "Verhandlungshebel 2"],
       "kurzbeschreibung": "Klauselwirkung → konkretes Risiko → Verhandlungsimplikation (2-3 Sätze)",
       "warum_verhandlungsrelevant": "Konkreter Grund, warum dies eine eigene Verhandlungsklausel erfordert",
       "primaerfundstelle_index": 0,
@@ -139,7 +169,10 @@ WICHTIG:
 - sekundaerfundstelle_indices = Indices weiterer Fundstellen dieses Themas (max. 2)
 - Jedes Eingabe-Thema muss entweder in finale_themen oder verworfene_themen erscheinen
 - KEIN Thema darf in beiden Listen gleichzeitig sein
-- ALLE Texte müssen auf Deutsch sein"""
+- ALLE Texte müssen auf Deutsch sein
+- problem_summary, impact, recommendation und negotiation sind PFLICHTFELDER
+- Keine langen Textblöcke — nur kurze, präzise Bullet-Points
+- Titel MÜSSEN kurz sein (max 8 Wörter, kein Satz)"""
 
 
 @dataclass
@@ -156,6 +189,10 @@ class FinalesThema:
     alternativformulierung: str = ""
     bieterfrage: str = ""
     verhandlungsargumente: list[str] = field(default_factory=list)
+    problem_summary: str = ""
+    impact: list[str] = field(default_factory=list)
+    recommendation: list[str] = field(default_factory=list)
+    negotiation: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -304,6 +341,17 @@ def _parse_ergebnis(data: dict, anzahl_themen: int) -> EditorialErgebnis | None:
             titel = enrich_generic_title(raw_titel, raw_kategorie, raw_kurz)
             titel = normalize_user_facing_text(titel)
 
+            # Parse new structured fields
+            raw_impact = item.get("impact", [])
+            if not isinstance(raw_impact, list):
+                raw_impact = []
+            raw_recommendation = item.get("recommendation", [])
+            if not isinstance(raw_recommendation, list):
+                raw_recommendation = []
+            raw_negotiation = item.get("negotiation", [])
+            if not isinstance(raw_negotiation, list):
+                raw_negotiation = []
+
             finale.append(FinalesThema(
                 quell_thema_index=int(item.get("quell_thema_index", 0)),
                 titel=titel,
@@ -323,6 +371,18 @@ def _parse_ergebnis(data: dict, anzahl_themen: int) -> EditorialErgebnis | None:
                 ),
                 verhandlungsargumente=[
                     normalize_user_facing_text(str(a)) for a in verhandlungsargs
+                ],
+                problem_summary=normalize_user_facing_text(
+                    str(item.get("problem_summary", ""))
+                ),
+                impact=[
+                    normalize_user_facing_text(str(x)) for x in raw_impact[:4]
+                ],
+                recommendation=[
+                    normalize_user_facing_text(str(x)) for x in raw_recommendation[:4]
+                ],
+                negotiation=[
+                    normalize_user_facing_text(str(x)) for x in raw_negotiation[:4]
                 ],
             ))
         except (ValueError, TypeError):

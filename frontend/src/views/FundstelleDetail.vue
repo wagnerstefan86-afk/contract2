@@ -1,26 +1,66 @@
 <template>
-  <div v-if="f">
+  <div v-if="f" style="max-width: 860px;">
     <!-- Header -->
-    <div style="margin-bottom: 1rem;">
+    <div style="margin-bottom: 1.25rem;">
       <router-link :to="`/vertrag/${f.vertrag_id}`" style="color: #6b7280; font-size: 0.85rem;">Zurück zum Vertrag</router-link>
-      <h1 style="margin: 0.25rem 0;">{{ f.kurzbeschreibung }}</h1>
-      <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
         <StatusBadge :status="f.risikostufe" />
-        <span style="color: #6b7280; font-size: 0.85rem;">{{ f.kategorie }}</span>
-        <span v-if="f.quelle_pass" style="color: #9ca3af; font-size: 0.8rem;">| {{ f.quelle_pass }}</span>
+        <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3;">{{ displayTitel }}</h1>
+      </div>
+      <p style="margin: 0.35rem 0 0; color: #374151; font-size: 0.95rem; line-height: 1.5;">{{ displayProblemSummary }}</p>
+      <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem;">
+        <span style="color: #6b7280; font-size: 0.8rem;">{{ f.kategorie }}</span>
         <span v-if="d && d.seite" style="color: #9ca3af; font-size: 0.8rem;">
           | Seite {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}
         </span>
         <span v-if="f.evidence_heading_path" style="color: #9ca3af; font-size: 0.8rem;">
           | {{ f.evidence_heading_path.substring(0, 60) }}{{ f.evidence_heading_path.length > 60 ? '...' : '' }}
         </span>
-        <span v-else-if="d && d.ueberschrift" style="color: #9ca3af; font-size: 0.8rem;">
-          | {{ d.ueberschrift.substring(0, 60) }}{{ d.ueberschrift.length > 60 ? '...' : '' }}
-        </span>
+        <span style="color: #9ca3af; font-size: 0.8rem;">| {{ f.pruef_status }}</span>
       </div>
     </div>
 
-    <!-- Tab navigation -->
+    <!-- Impact -->
+    <div v-if="displayImpact.length" style="background: #fef2f2; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #dc2626; margin-bottom: 1rem;">
+      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #991b1b; text-transform: uppercase; letter-spacing: 0.03em;">Auswirkungen</h3>
+      <ul style="margin: 0; padding-left: 1.2rem; list-style: disc;">
+        <li v-for="(item, i) in displayImpact" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
+      </ul>
+    </div>
+
+    <!-- Action Block: Recommendation + Negotiation (always visible) -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem;">
+      <!-- Recommendation -->
+      <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #16a34a;">
+        <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
+        <ul v-if="displayRecommendation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
+          <li v-for="(item, i) in displayRecommendation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
+        </ul>
+        <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Klausel im Detail prüfen und ggf. nachverhandeln.</p>
+      </div>
+      <!-- Negotiation -->
+      <div style="background: #fff7ed; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #ea580c;">
+        <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
+        <ul v-if="displayNegotiation.length" style="margin: 0; padding-left: 1.2rem; list-style: disc;">
+          <li v-for="(item, i) in displayNegotiation" :key="i" style="margin-bottom: 0.2rem; line-height: 1.4; font-size: 0.9rem; color: #1f2937;">{{ item }}</li>
+        </ul>
+        <p v-else style="margin: 0; color: #6b7280; font-size: 0.9rem;">Marktübliche Regelung als Gegenvorschlag einbringen.</p>
+      </div>
+    </div>
+
+    <!-- Alternativformulierung (if available, shown directly) -->
+    <div v-if="displayAlternativ" style="background: #eff6ff; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #2563eb; margin-bottom: 1rem;">
+      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #1e40af; text-transform: uppercase; letter-spacing: 0.03em;">Alternativformulierung</h3>
+      <p style="margin: 0; line-height: 1.5; font-size: 0.9rem; font-style: italic; color: #1f2937;">{{ displayAlternativ }}</p>
+    </div>
+
+    <!-- Bieterfrage (if available, shown directly) -->
+    <div v-if="displayBieterfrage" style="background: #faf5ff; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #7c3aed; margin-bottom: 1.25rem;">
+      <h3 style="margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #5b21b6; text-transform: uppercase; letter-spacing: 0.03em;">Bieterfrage</h3>
+      <p style="margin: 0; line-height: 1.5; font-size: 0.9rem; color: #1f2937;">{{ displayBieterfrage }}</p>
+    </div>
+
+    <!-- Tab navigation (secondary content only) -->
     <div style="display: flex; gap: 0; border-bottom: 2px solid #e5e7eb; margin-bottom: 1rem;">
       <button
         v-for="tab in tabs"
@@ -38,50 +78,6 @@
         }"
         @click="activeTab = tab.key"
       >{{ tab.label }}</button>
-    </div>
-
-    <!-- Tab: Überblick -->
-    <div v-if="activeTab === 'ueberblick'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Risikobewertung</h3>
-        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap;">
-          <div>
-            <span style="color: #6b7280; font-size: 0.8rem;">Risikostufe</span>
-            <div><StatusBadge :status="f.risikostufe" /></div>
-          </div>
-          <div>
-            <span style="color: #6b7280; font-size: 0.8rem;">Kategorie</span>
-            <div style="font-weight: 500;">{{ f.kategorie }}</div>
-          </div>
-          <div v-if="d && d.seite">
-            <span style="color: #6b7280; font-size: 0.8rem;">Seite</span>
-            <div style="font-weight: 500;">{{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</div>
-          </div>
-          <div v-if="d && d.absatz_referenzen && d.absatz_referenzen.length">
-            <span style="color: #6b7280; font-size: 0.8rem;">Abschnitt</span>
-            <div style="font-weight: 500;">{{ d.absatz_referenzen.join(', ') }}</div>
-          </div>
-          <div v-if="d && d.ueberschrift">
-            <span style="color: #6b7280; font-size: 0.8rem;">Klausel / Überschrift</span>
-            <div style="font-weight: 500;">{{ d.ueberschrift }}</div>
-          </div>
-        </div>
-      </div>
-
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Erklärung</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ f.erklaerung || 'Keine Erklärung verfügbar.' }}</p>
-      </div>
-
-      <div v-if="d && d.risiko_detail" style="background: #fef2f2; padding: 1rem; border-radius: 6px; border-left: 4px solid #dc2626;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #991b1b;">Risikodetail</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ d.risiko_detail }}</p>
-      </div>
-
-      <div style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Empfehlung</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ f.empfehlung || 'Keine Empfehlung verfügbar.' }}</p>
-      </div>
     </div>
 
     <!-- Tab: Textstelle & Kontext -->
@@ -165,50 +161,6 @@
       </div>
     </div>
 
-    <!-- Tab: Empfehlung / Formulierung -->
-    <div v-if="activeTab === 'empfehlung'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div style="background: #f0fdf4; padding: 1rem; border-radius: 6px; border-left: 4px solid #16a34a;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #166534;">Handlungsempfehlung</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ f.empfehlung || 'Keine Empfehlung verfügbar.' }}</p>
-      </div>
-
-      <div v-if="d && d.alternativformulierung" style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #2563eb;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #1e40af;">Alternativformulierung</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap; font-style: italic;">{{ d.alternativformulierung }}</p>
-      </div>
-
-      <div v-if="d && d.bieterfrage" style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #7c3aed;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #5b21b6;">Bieterfrage</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ d.bieterfrage }}</p>
-      </div>
-
-      <div v-if="!d || (!d.alternativformulierung && !d.bieterfrage)" style="background: #f9fafb; padding: 1rem; border-radius: 6px; color: #6b7280; text-align: center;">
-        Strukturierte Empfehlungsfelder werden bei der nächsten Analyse automatisch befüllt.
-      </div>
-    </div>
-
-    <!-- Tab: Verhandlung -->
-    <div v-if="activeTab === 'verhandlung'" style="display: flex; flex-direction: column; gap: 1rem;">
-      <div v-if="d && d.verhandlungsargumente" style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #ea580c;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #9a3412;">Verhandlungsargumente</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ d.verhandlungsargumente }}</p>
-      </div>
-
-      <div v-if="d && d.risiko_detail" style="background: white; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #374151;">Risikoeinordnung (für Verhandlung)</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap;">{{ d.risiko_detail }}</p>
-      </div>
-
-      <div v-if="d && d.alternativformulierung" style="background: #eff6ff; padding: 1rem; border-radius: 6px;">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.95rem; color: #1e40af;">Vorgeschlagene Alternativformulierung</h3>
-        <p style="margin: 0; line-height: 1.6; white-space: pre-wrap; font-style: italic;">{{ d.alternativformulierung }}</p>
-      </div>
-
-      <div v-if="!d || (!d.verhandlungsargumente && !d.risiko_detail)" style="background: #f9fafb; padding: 1rem; border-radius: 6px; color: #6b7280; text-align: center;">
-        Verhandlungsfelder werden bei der nächsten Analyse automatisch befüllt.
-      </div>
-    </div>
-
     <!-- Tab: Nachweise -->
     <div v-if="activeTab === 'nachweise'" style="display: flex; flex-direction: column; gap: 1rem;">
       <div style="background: #f9fafb; padding: 1rem; border-radius: 6px;">
@@ -255,24 +207,67 @@ import { ref, computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import api from "../api/client";
 import StatusBadge from "../components/StatusBadge.vue";
-import type { Fundstelle, FundstelleDetail } from "../types";
+import type { Fundstelle, FundstelleDetail as FundstelleDetailType, ThemaEditorialContext } from "../types";
 
 const route = useRoute();
 const f = ref<Fundstelle | null>(null);
 const kommentar = ref("");
 const statusOptionen = ["Offen", "Bestätigt", "Abgelehnt", "Zurückgestellt"];
-const activeTab = ref("ueberblick");
+const activeTab = ref("textstelle");
 
 const tabs = [
-  { key: "ueberblick", label: "Überblick" },
   { key: "textstelle", label: "Textstelle & Kontext" },
   { key: "bewertung", label: "Bewertung" },
-  { key: "empfehlung", label: "Empfehlung" },
-  { key: "verhandlung", label: "Verhandlung" },
   { key: "nachweise", label: "Nachweise" },
 ];
 
-const d = computed<FundstelleDetail | null>(() => f.value?.detail ?? null);
+const d = computed<FundstelleDetailType | null>(() => f.value?.detail ?? null);
+const te = computed<ThemaEditorialContext | null>(() => f.value?.thema_editorial ?? null);
+
+// Display title: prefer theme editorial title, fallback to truncated kurzbeschreibung
+const displayTitel = computed(() => {
+  if (te.value?.titel) return te.value.titel;
+  const kb = f.value?.kurzbeschreibung || "";
+  // Truncate to ~8 words if too long
+  const words = kb.split(/\s+/);
+  if (words.length <= 8) return kb;
+  return words.slice(0, 8).join(" ") + "…";
+});
+
+// Problem summary: prefer theme editorial, fallback to erklaerung first sentence
+const displayProblemSummary = computed(() => {
+  if (te.value?.problem_summary) return te.value.problem_summary;
+  // Fallback: kurzbeschreibung (full, since title is now short)
+  return f.value?.kurzbeschreibung || "";
+});
+
+// Impact bullets: from theme editorial
+const displayImpact = computed(() => te.value?.impact?.length ? te.value.impact : []);
+
+// Recommendation bullets: from theme editorial, fallback to empfehlung as single bullet
+const displayRecommendation = computed(() => {
+  if (te.value?.recommendation?.length) return te.value.recommendation;
+  if (f.value?.empfehlung) return [f.value.empfehlung];
+  return [];
+});
+
+// Negotiation bullets: from theme editorial, fallback to verhandlungsargumente
+const displayNegotiation = computed(() => {
+  if (te.value?.negotiation?.length) return te.value.negotiation;
+  if (te.value?.verhandlungsargumente?.length) return te.value.verhandlungsargumente;
+  if (d.value?.verhandlungsargumente) return [d.value.verhandlungsargumente];
+  return [];
+});
+
+// Alternativformulierung
+const displayAlternativ = computed(() => {
+  return te.value?.alternativformulierung || d.value?.alternativformulierung || "";
+});
+
+// Bieterfrage
+const displayBieterfrage = computed(() => {
+  return te.value?.bieterfrage || d.value?.bieterfrage || "";
+});
 
 const highlightedScopeText = computed(() => {
   if (!f.value?.scope_text) return "";

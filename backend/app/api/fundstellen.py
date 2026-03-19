@@ -11,7 +11,7 @@ from app.models.benutzer import Benutzer
 from app.models.analyse import Analyse
 from app.models.fundstelle import Fundstelle
 from app.models.risikothema import RisikoThema, risikothema_fundstellen
-from app.schemas.fundstelle import FundstelleResponse, FundstelleUpdate
+from app.schemas.fundstelle import FundstelleResponse, FundstelleDetailResponse, FundstelleUpdate, ThemaEditorialContext
 from app.api.risikothemen import _build_evidences
 
 router = APIRouter(prefix="/fundstellen", tags=["Fundstellen"])
@@ -267,12 +267,40 @@ async def offene_fundstellen_gruppiert(user: Benutzer = Depends(get_current_user
     return {"gruppen": [], "debug": {"vorher": 0, "nachher": 0, "reduktion_prozent": 0, "gruppen_details": [], "quelle": "no_themes"}}
 
 
-@router.get("/{fundstelle_id}", response_model=FundstelleResponse)
+@router.get("/{fundstelle_id}", response_model=FundstelleDetailResponse)
 async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     fundstelle = await db.get(Fundstelle, fundstelle_id)
     if not fundstelle:
         raise HTTPException(status_code=404, detail="Fundstelle nicht gefunden")
-    return fundstelle
+
+    # Look up parent theme editorial data
+    thema_editorial = None
+    result = await db.execute(
+        select(RisikoThema)
+        .join(risikothema_fundstellen, RisikoThema.id == risikothema_fundstellen.c.risikothema_id)
+        .where(risikothema_fundstellen.c.fundstelle_id == fundstelle_id)
+        .where(RisikoThema.final_selected.is_(True))
+        .limit(1)
+    )
+    thema = result.scalar_one_or_none()
+    if thema and thema.final_editorial:
+        ed = thema.final_editorial
+        thema_editorial = ThemaEditorialContext(
+            thema_id=thema.id,
+            titel=thema.titel,
+            problem_summary=ed.get("problem_summary", ""),
+            impact=ed.get("impact", []),
+            recommendation=ed.get("recommendation", []),
+            negotiation=ed.get("negotiation", []),
+            warum_verhandlungsrelevant=ed.get("warum_verhandlungsrelevant", ""),
+            alternativformulierung=ed.get("alternativformulierung", ""),
+            bieterfrage=ed.get("bieterfrage", ""),
+            verhandlungsargumente=ed.get("verhandlungsargumente", []),
+        )
+
+    resp = FundstelleDetailResponse.model_validate(fundstelle)
+    resp.thema_editorial = thema_editorial
+    return resp
 
 
 @router.patch("/{fundstelle_id}", response_model=FundstelleResponse)

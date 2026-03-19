@@ -107,7 +107,7 @@
               <span style="color: #6b7280; font-size: 0.8rem;">{{ thema.kategorie }}</span>
             </div>
             <div v-if="!offeneGruppen.has(thema.id)" style="color: #374151; font-size: 0.8rem; margin-top: 0.25rem;">
-              {{ thema.kurzbeschreibung.substring(0, 200) }}{{ thema.kurzbeschreibung.length > 200 ? '...' : '' }}
+              {{ (thema.problem_summary || thema.kurzbeschreibung).substring(0, 200) }}{{ (thema.problem_summary || thema.kurzbeschreibung).length > 200 ? '...' : '' }}
             </div>
           </div>
           <span style="color: #9ca3af; font-size: 1.2rem; margin-left: 0.5rem;">
@@ -117,11 +117,28 @@
 
         <!-- Expanded content -->
         <div v-if="offeneGruppen.has(thema.id)" style="border-top: 1px solid #e5e7eb;">
-          <!-- Risk description -->
+          <!-- Problem summary + impact -->
           <div style="padding: 0.75rem 1rem; background: #f9fafb; font-size: 0.85rem;">
-            <div style="color: #374151; margin-bottom: 0.5rem;">{{ thema.kurzbeschreibung }}</div>
-            <div v-if="thema.warum_verhandlungsrelevant" style="color: #1e40af; font-size: 0.8rem;">
-              <strong>Verhandlungsrelevanz:</strong> {{ thema.warum_verhandlungsrelevant }}
+            <div v-if="thema.problem_summary" style="color: #374151; margin-bottom: 0.5rem; font-weight: 500;">{{ thema.problem_summary }}</div>
+            <div v-else style="color: #374151; margin-bottom: 0.5rem;">{{ thema.kurzbeschreibung }}</div>
+            <ul v-if="thema.impact && thema.impact.length" style="margin: 0.25rem 0 0.5rem 1rem; padding: 0; color: #991b1b; font-size: 0.8rem;">
+              <li v-for="(imp, ii) in thema.impact" :key="ii" style="margin-bottom: 0.15rem;">{{ imp }}</li>
+            </ul>
+          </div>
+
+          <!-- Recommendation + Negotiation inline -->
+          <div v-if="(thema.recommendation && thema.recommendation.length) || (thema.negotiation && thema.negotiation.length)" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid #e5e7eb; font-size: 0.8rem;">
+            <div v-if="thema.recommendation && thema.recommendation.length" style="padding: 0.5rem 1rem; border-right: 1px solid #e5e7eb;">
+              <strong style="color: #166534; font-size: 0.75rem; text-transform: uppercase;">Empfehlung</strong>
+              <ul style="margin: 0.25rem 0 0 1rem; padding: 0; color: #374151;">
+                <li v-for="(r, ri) in thema.recommendation" :key="ri" style="margin-bottom: 0.15rem;">{{ r }}</li>
+              </ul>
+            </div>
+            <div v-if="thema.negotiation && thema.negotiation.length" style="padding: 0.5rem 1rem;">
+              <strong style="color: #9a3412; font-size: 0.75rem; text-transform: uppercase;">Verhandlung</strong>
+              <ul style="margin: 0.25rem 0 0 1rem; padding: 0; color: #374151;">
+                <li v-for="(n, ni) in thema.negotiation" :key="ni" style="margin-bottom: 0.15rem;">{{ n }}</li>
+              </ul>
             </div>
           </div>
 

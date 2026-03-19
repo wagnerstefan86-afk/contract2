@@ -32,6 +32,25 @@ class FundstelleResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ThemaEditorialContext(BaseModel):
+    """Parent theme editorial data for the detail view."""
+    thema_id: UUID | None = None
+    titel: str = ""
+    problem_summary: str = ""
+    impact: list[str] = []
+    recommendation: list[str] = []
+    negotiation: list[str] = []
+    warum_verhandlungsrelevant: str = ""
+    alternativformulierung: str = ""
+    bieterfrage: str = ""
+    verhandlungsargumente: list[str] = []
+
+
+class FundstelleDetailResponse(FundstelleResponse):
+    """Extended response for single-fundstelle detail view with parent theme context."""
+    thema_editorial: ThemaEditorialContext | None = None
+
+
 class FundstelleUpdate(BaseModel):
     pruef_status: str | None = None
     pruef_kommentar: str | None = None
