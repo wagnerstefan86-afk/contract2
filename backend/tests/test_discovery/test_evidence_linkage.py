@@ -1,27 +1,20 @@
 """Tests for the deterministic source fingerprint evidence linkage model.
 
 Covers:
-A. Default mode (title fallback DISABLED)
+A. Deterministic-only resolution
   1. Deterministic fingerprints from source attributes
   2. Fingerprints survive consolidation
   3. Fingerprint-based linkage when index missing
   4. Merged findings preserve provenance fingerprints
   5. Duplicate prevention
-  6. Missing provenance → unresolved, no title matching
-  7. exact_title_fallback_matches == 0 in default mode
-  8. refs_missing_provenance counted correctly
-  9. Ambiguous fingerprints not auto-linked
+  6. Missing provenance → unresolved (no fallback)
+  7. refs_missing_provenance counted correctly
+  8. Ambiguous fingerprints not auto-linked
 
-B. Fallback enabled mode (title fallback ON via flag)
-  10. Title fallback works when explicitly enabled
-  11. Metrics correctly reflect fallback usage
-  12. Title fallback only triggers when index + fingerprint both fail
-
-C. Regression / structural tests
-  13. Parse clusters, merge, dedup, reassign unchanged
-  14. Feature flag defaults to False
-  15. has_deterministic_provenance() helper
-  16. LinkageStats includes all metrics
+B. Regression / structural tests
+  9. Parse clusters, merge, dedup, reassign unchanged
+  10. has_deterministic_provenance() helper
+  11. LinkageStats includes all metrics
 """
 
 from __future__ import annotations
@@ -33,7 +26,6 @@ import pytest
 
 from app.discovery.passes.base import RawFinding, build_source_fingerprint
 from app.discovery.passes.themen_cluster import (
-    ENABLE_TITLE_FALLBACK,
     TopicCluster,
     TopicEvidenceRef,
     LinkageStats,
@@ -96,15 +88,8 @@ def _make_raw_finding(textstelle: str, segment_ids: list[str] | None = None,
 
 
 # =============================================================================
-# A. DEFAULT MODE — title fallback DISABLED
+# A. DETERMINISTIC-ONLY RESOLUTION
 # =============================================================================
-
-class TestFeatureFlagDefault:
-    """The module-level flag must default to False."""
-
-    def test_flag_defaults_to_disabled(self):
-        assert ENABLE_TITLE_FALLBACK is False
-
 
 class TestHasDeterministicProvenance:
     """TopicEvidenceRef.has_deterministic_provenance() helper."""
@@ -130,8 +115,8 @@ class TestHasDeterministicProvenance:
         assert ref.has_deterministic_provenance() is False
 
 
-class TestDefaultModeNoTitleFallback:
-    """With fallback disabled, title-only refs must NOT resolve."""
+class TestDeterministicResolution:
+    """Title-only refs must NOT resolve. Only index and fingerprint work."""
 
     def test_title_only_ref_is_unresolved(self):
         """Ref with source_title but no index/fingerprint → unresolved."""
@@ -147,24 +132,9 @@ class TestDefaultModeNoTitleFallback:
 
         assert len(result[0][1]) == 0
         assert stats.unresolved_references == 1
-        assert stats.exact_title_fallback_matches == 0
         assert stats.refs_missing_provenance == 1
 
-    def test_zero_title_fallback_matches_in_default_mode(self):
-        """exact_title_fallback_matches is always 0 when flag disabled."""
-        fs = _make_fundstelle("Match")
-        ref = TopicEvidenceRef(source_title="Match")
-        cluster = _make_cluster("Topic", [ref])
-
-        _, stats = resolve_topic_fundstellen(
-            [cluster], [fs],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle={},
-        )
-
-        assert stats.exact_title_fallback_matches == 0
-
-    def test_index_resolution_still_works(self):
+    def test_index_resolution_works(self):
         fs0 = _make_fundstelle("F1")
         fs1 = _make_fundstelle("F2")
         cluster = _make_cluster("Topic", [_make_ref(1, "F1"), _make_ref(2, "F2")])
@@ -177,9 +147,8 @@ class TestDefaultModeNoTitleFallback:
 
         assert len(result[0][1]) == 2
         assert stats.direct_index_matches == 2
-        assert stats.exact_title_fallback_matches == 0
 
-    def test_fingerprint_resolution_still_works(self):
+    def test_fingerprint_resolution_works(self):
         text = "Der Auftragnehmer haftet."
         fp = build_source_fingerprint(text, ["seg1"])
         fs = _make_fundstelle("X", textstelle=text, absatz_ids=["seg1"])
@@ -301,98 +270,9 @@ class TestCompletelyEmptyRef:
         assert stats.refs_missing_provenance == 1
 
 
-# =============================================================================
-# B. FALLBACK ENABLED MODE (flag=True)
-# =============================================================================
-
-class TestTitleFallbackEnabled:
-    """When enable_title_fallback=True, title matching works as before."""
-
-    def test_title_fallback_works_when_enabled(self):
-        fs = _make_fundstelle("Exact Match Title")
-        ref = TopicEvidenceRef(source_title="Exact Match Title")
-        cluster = _make_cluster("Topic", [ref])
-
-        result, stats = resolve_topic_fundstellen(
-            [cluster], [fs],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle={},
-            enable_title_fallback=True,
-        )
-
-        assert len(result[0][1]) == 1
-        assert stats.exact_title_fallback_matches == 1
-        assert stats.refs_missing_provenance == 1  # Still counted as missing prov
-
-    def test_title_fallback_only_after_index_and_fp_fail(self):
-        """Title fallback should not trigger if fingerprint resolves it."""
-        text = "Specific clause."
-        fp = build_source_fingerprint(text, ["seg1"])
-        fs = _make_fundstelle("Same Title", textstelle=text, absatz_ids=["seg1"])
-
-        ref = TopicEvidenceRef(source_title="Same Title", source_fingerprint=fp)
-        cluster = _make_cluster("Topic", [ref])
-
-        result, stats = resolve_topic_fundstellen(
-            [cluster], [fs],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle={fp: [fs]},
-            enable_title_fallback=True,
-        )
-
-        assert len(result[0][1]) == 1
-        assert stats.source_fingerprint_matches == 1
-        assert stats.exact_title_fallback_matches == 0
-
-    def test_metrics_honestly_label_fallback(self):
-        fs = _make_fundstelle("Title Match")
-        ref = TopicEvidenceRef(source_title="Title Match")
-        cluster = _make_cluster("Topic", [ref])
-
-        _, stats = resolve_topic_fundstellen(
-            [cluster], [fs],
-            raw_index_to_fundstelle={},
-            fingerprint_to_fundstelle={},
-            enable_title_fallback=True,
-        )
-
-        d = stats.to_dict()
-        assert d["exact_title_fallback_matches"] == 1
-        assert d["source_fingerprint_matches"] == 0
-        assert d["refs_missing_provenance"] == 1
-
-    def test_mixed_three_strategy_with_fallback(self):
-        """All three strategies in one pass when fallback is enabled."""
-        text_a = "Clause about liability."
-        text_b = "Clause about audit rights."
-        fp_b = build_source_fingerprint(text_b, ["seg2"])
-
-        fs_a = _make_fundstelle("Finding A", textstelle=text_a, absatz_ids=["seg1"])
-        fs_b = _make_fundstelle("Finding B", textstelle=text_b, absatz_ids=["seg2"])
-        fs_c = _make_fundstelle("Title Only", textstelle="other", absatz_ids=["seg3"])
-
-        ref_index = _make_ref(1, "Finding A")
-        ref_fp = TopicEvidenceRef(source_fingerprint=fp_b)
-        ref_title = TopicEvidenceRef(source_title="Title Only")
-
-        cluster = _make_cluster("Topic", [ref_index, ref_fp, ref_title])
-
-        result, stats = resolve_topic_fundstellen(
-            [cluster], [fs_a, fs_b, fs_c],
-            raw_index_to_fundstelle={0: [fs_a]},
-            fingerprint_to_fundstelle={fp_b: [fs_b]},
-            enable_title_fallback=True,
-        )
-
-        assert len(result[0][1]) == 3
-        assert stats.direct_index_matches == 1
-        assert stats.source_fingerprint_matches == 1
-        assert stats.exact_title_fallback_matches == 1
-        assert stats.refs_missing_provenance == 1  # ref_title has no index/fp
-
 
 # =============================================================================
-# C. REGRESSION / STRUCTURAL TESTS
+# B. REGRESSION / STRUCTURAL TESTS
 # =============================================================================
 
 class TestSourceFingerprintGeneration:
@@ -557,7 +437,6 @@ class TestLinkageStats:
         stats = LinkageStats(
             direct_index_matches=5,
             source_fingerprint_matches=3,
-            exact_title_fallback_matches=0,
             ambiguous_fingerprints=1,
             unresolved_references=2,
             duplicate_reference_collisions=0,
@@ -568,14 +447,14 @@ class TestLinkageStats:
         d = stats.to_dict()
         assert d["direct_index_matches"] == 5
         assert d["source_fingerprint_matches"] == 3
-        assert d["exact_title_fallback_matches"] == 0
         assert d["ambiguous_fingerprints"] == 1
         assert d["unresolved_references"] == 2
         assert d["duplicate_reference_collisions"] == 0
         assert d["fingerprint_collisions"] == 1
         assert d["refs_missing_provenance"] == 2
         assert d["total_references"] == 13
-        # Old field names must not appear
+        # Removed fields must not appear
+        assert "exact_title_fallback_matches" not in d
         assert "fingerprint_matches" not in d
         assert "exact_title_matches" not in d
         assert "unresolved_evidences" not in d

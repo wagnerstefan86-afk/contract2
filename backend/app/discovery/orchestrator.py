@@ -579,7 +579,6 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                    f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
                    f"Linkage: {linkage_stats.direct_index_matches} index, "
                    f"{linkage_stats.source_fingerprint_matches} fp, "
-                   f"{linkage_stats.exact_title_fallback_matches} title-fb, "
                    f"{linkage_stats.unresolved_references} unresolved, "
                    f"{linkage_stats.refs_missing_provenance} missing-prov.",
                    details=metriken)
