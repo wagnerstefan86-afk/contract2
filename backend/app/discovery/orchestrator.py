@@ -465,10 +465,20 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     if topic_clusters:
         logger.info("Persist topic clusters: resolving evidence → Fundstellen mapping")
 
-        # Collect Fundstelle IDs eagerly (already in memory after flush, no lazy load)
-        fs_id_map = {i: fs.id for i, fs in enumerate(persisted_fundstellen)}
+        # Build deterministic mapping: raw_finding_index (0-based) → Fundstelle objects.
+        # ConsolidatedFinding.source_raw_indices tracks which RawFindings were merged
+        # into each consolidated finding, and persisted_fundstellen is in the same
+        # order as consolidated.
+        raw_index_to_fundstelle: dict[int, list] = {}
+        for cf_idx, cf in enumerate(consolidated):
+            fs = persisted_fundstellen[cf_idx]
+            for raw_idx in cf.source_raw_indices:
+                raw_index_to_fundstelle.setdefault(raw_idx, []).append(fs)
 
-        resolved = resolve_topic_fundstellen(topic_clusters, persisted_fundstellen)
+        resolved, linkage_stats = resolve_topic_fundstellen(
+            topic_clusters, persisted_fundstellen,
+            raw_index_to_fundstelle=raw_index_to_fundstelle,
+        )
 
         junction_rows = []
         for idx, (cluster, linked_fundstellen) in enumerate(resolved):
@@ -505,14 +515,15 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         titel_liste = [c.titel for c, _ in resolved]
         aehnliche_themen = berechne_titel_aehnlichkeit(titel_liste)
         metriken["aehnliche_themen"] = aehnliche_themen
+        metriken["evidence_linkage"] = linkage_stats.to_dict()
 
         auswertung["clustering_metriken"] = metriken
 
         await _log(db, aid, vid,
                    f"{len(resolved)} Risikothemen mit Fundstellen verknüpft. "
-                   f"Metriken: Ø {metriken['durchschnittliche_fundstellen_pro_thema']} Evidence/Thema, "
-                   f"{metriken['anzahl_themen_mit_nur_1_fundstelle']} Themen mit nur 1 Fundstelle, "
-                   f"{metriken['anzahl_evidence_mehrfach_zugeordnet']} mehrfach zugeordnet.",
+                   f"Linkage: {linkage_stats.direct_index_matches} by index, "
+                   f"{linkage_stats.fingerprint_matches} by exact title, "
+                   f"{linkage_stats.unresolved_evidences} unresolved.",
                    details=metriken)
 
     # --- Step 7: Final Editorial Pass ---
@@ -619,44 +630,23 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                     thema.final_selected = False
                     thema.final_verwerfungsgrund = "Vom LLM nicht adressiert"
 
-            # --- Evidence integrity check ---
+            # --- Evidence integrity check (hard invariant) ---
             # A final_selected theme MUST have ≥1 linked Fundstelle.
-            # If fuzzy matching failed, the junction table has zero rows.
+            # No heuristic fallback — incorrect linkage is worse than dropping.
+            # If linkage failed, the theme is dropped from final selection.
             themes_dropped_no_evidence = 0
             for idx, thema in enumerate(persisted_themen):
                 if not thema.final_selected:
                     continue
                 linked_fs = resolved_fs_map.get(idx, [])
                 if len(linked_fs) == 0:
-                    # Fallback: try to assign the highest-severity unlinked Fundstelle
-                    _SEVERITY_ORDER = {"Kritisch": 0, "Hoch": 1, "Mittel": 2, "Niedrig": 3, "Hinweis": 4}
-                    assigned_fs_ids = {fs.id for _, fsl in resolved_fs_map.items() for fs in fsl}
-                    unlinked = [
-                        fs for fs in persisted_fundstellen
-                        if fs.id not in assigned_fs_ids
-                    ]
-                    unlinked.sort(key=lambda f: _SEVERITY_ORDER.get(f.risikostufe, 9))
-                    if unlinked:
-                        fallback_fs = unlinked[0]
-                        junction_rows_extra = [{
-                            "risikothema_id": thema.id,
-                            "fundstelle_id": fallback_fs.id,
-                        }]
-                        await db.execute(risikothema_fundstellen.insert(), junction_rows_extra)
-                        resolved_fs_map[idx] = [fallback_fs]
-                        logger.warning(
-                            f"RisikoThema '{thema.titel}' (id={thema.id}) hatte 0 Evidenzen. "
-                            f"Fallback: Fundstelle {fallback_fs.id} zugewiesen."
-                        )
-                    else:
-                        # No recovery possible — drop from final selection
-                        thema.final_selected = False
-                        thema.final_verwerfungsgrund = "Keine zugeordneten Evidenzen"
-                        themes_dropped_no_evidence += 1
-                        logger.warning(
-                            f"RisikoThema '{thema.titel}' (id={thema.id}, analyse_id={thema.analyse_id}) "
-                            f"final_selected zurückgesetzt: 0 Evidenzen, kein Fallback verfügbar."
-                        )
+                    thema.final_selected = False
+                    thema.final_verwerfungsgrund = "Keine zugeordneten Evidenzen (Linkage fehlgeschlagen)"
+                    themes_dropped_no_evidence += 1
+                    logger.warning(
+                        f"RisikoThema '{thema.titel}' (id={thema.id}, analyse_id={thema.analyse_id}) "
+                        f"final_selected zurückgesetzt: 0 Evidenzen nach deterministischer Auflösung."
+                    )
 
             await db.flush()
 
@@ -747,6 +737,13 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     except NameError:
         pass
 
+    # Collect linkage stats if available
+    linkage_dict = {}
+    try:
+        linkage_dict = linkage_stats.to_dict()
+    except NameError:
+        pass
+
     analysis_stats = {
         "perspective": perspective,
         "raw_findings": dedup_result.raw_before,
@@ -756,6 +753,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         "clusters": len(topic_clusters) if topic_clusters else 0,
         "kernthemen": kernthemen_count,
         "evidence_count": evidence_count,
+        "evidence_linkage": linkage_dict,
     }
     auswertung["analysis_stats"] = analysis_stats
 

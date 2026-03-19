@@ -201,8 +201,11 @@ async def _load_final_themen(db: AsyncSession,
     result = await db.execute(q)
     alle = list(result.scalars().all())
 
-    # Prefer final_selected themes (editorial pass output)
-    # Enforce invariant: only return themes that have ≥1 linked Fundstelle
+    # Prefer final_selected themes (editorial pass output).
+    # LEGACY SAFETY NET: The pipeline now enforces deterministic evidence linkage
+    # and drops themes without evidence before persistence. This API-level filter
+    # guards against data from older pipeline runs that may still contain
+    # zero-evidence final themes. It is NOT the primary correctness mechanism.
     final = [t for t in alle if t.final_selected and len(t.fundstellen) > 0]
     if final:
         return final

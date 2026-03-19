@@ -28,6 +28,10 @@ class ConsolidatedFinding:
     merged_from: list[dict] = field(default_factory=list)
     # How many raw candidates contributed (including self)
     raw_count: int = 1
+    # Indices of all source RawFindings (from the input list) that were
+    # merged into this consolidated finding. Used for deterministic
+    # evidence linkage from TopicCluster.evidence_indices.
+    source_raw_indices: list[int] = field(default_factory=list)
 
     def merge_info(self) -> dict:
         """Return a serializable summary of the merge provenance."""
@@ -46,6 +50,10 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
     if not findings:
         return []
 
+    # Build original-index lookup before sorting.
+    # findings list uses 0-based indexing internally; clustering uses 1-based.
+    identity_map = {id(f): idx for idx, f in enumerate(findings)}
+
     # Sort by textstelle length descending — prefer longer/richer entries as "primary"
     sorted_findings = sorted(findings, key=lambda f: len(f.textstelle), reverse=True)
 
@@ -53,6 +61,7 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
 
     for candidate in sorted_findings:
         is_duplicate = False
+        candidate_raw_idx = identity_map[id(candidate)]
 
         for existing in kept:
             # Check textstelle similarity
@@ -65,6 +74,7 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
                 if desc_sim >= 0.6:
                     # Same text + similar description = duplicate. Merge.
                     _merge_into(existing, candidate, text_sim, desc_sim)
+                    existing.source_raw_indices.append(candidate_raw_idx)
                     is_duplicate = True
                     break
                 # else: different angle on same text — keep both
@@ -80,6 +90,7 @@ def konsolidiere(findings: list[RawFinding], similarity_threshold: float = 0.75)
                     "status": "primär",
                 }],
                 raw_count=1,
+                source_raw_indices=[candidate_raw_idx],
             )
             kept.append(cf)
 
