@@ -36,6 +36,11 @@ class ThemaEditorialContext(BaseModel):
     """Parent theme editorial data for the detail view."""
     thema_id: UUID | None = None
     titel: str = ""
+    # Theme-level fields for fallback resolution
+    kategorie: str = ""
+    risikostufe: str = ""
+    kurzbeschreibung: str = ""
+    # Structured editorial fields
     problem_summary: str = ""
     impact: list[str] = []
     recommendation: list[str] = []

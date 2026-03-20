@@ -59,6 +59,11 @@ export type DecisionStatus = "OPEN" | "IN_NEGOTIATION" | "ACCEPTED" | "REJECTED"
 export interface ThemaEditorialContext {
   thema_id: string | null;
   titel: string;
+  // Theme-level fields for fallback resolution
+  kategorie: string;
+  risikostufe: string;
+  kurzbeschreibung: string;
+  // Structured editorial fields
   problem_summary: string;
   impact: string[];
   recommendation: string[];

@@ -4,12 +4,12 @@
     <div style="margin-bottom: 1rem;">
       <router-link :to="`/vertrag/${f.vertrag_id}`" style="color: #6b7280; font-size: 0.85rem;">Zurück zum Vertrag</router-link>
       <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
-        <StatusBadge :status="f.risikostufe" />
-        <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">{{ displayTitel }}</h1>
+        <StatusBadge :status="displayRisikostufe" />
+        <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3; max-width: 600px;">{{ displayTitel }}</h1>
         <DecisionBadge v-if="te" :status="currentDecisionStatus" />
       </div>
       <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.35rem;">
-        <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ f.kategorie }}</span>
+        <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ displayKategorie }}</span>
         <span v-if="f.evidence_page_from" style="color: #9ca3af; font-size: 0.78rem;">Seite {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</span>
         <span v-else-if="d && d.seite" style="color: #9ca3af; font-size: 0.78rem;">Seite {{ d.seite }}{{ d.seite_unsicher ? ' (ca.)' : '' }}</span>
         <span v-if="f.evidence_heading_path" style="color: #9ca3af; font-size: 0.78rem;">{{ f.evidence_heading_path.substring(0, 50) }}{{ f.evidence_heading_path.length > 50 ? '...' : '' }}</span>
@@ -30,7 +30,7 @@
     </div>
 
     <!-- === RECOMMENDATION (strongest block, always visible) === -->
-    <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border-left: 4px solid #16a34a; margin-bottom: 0.75rem; border: 1px solid #dcfce7; border-left: 4px solid #16a34a;">
+    <div style="background: #f0fdf4; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid #dcfce7; border-left: 4px solid #16a34a; margin-bottom: 0.75rem;">
       <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.35rem;">
         <span style="font-size: 0.9rem;">&#9989;</span>
         <h3 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</h3>
@@ -50,24 +50,22 @@
       </div>
     </div>
 
-    <!-- === NEGOTIATION (visible if content exists) === -->
-    <div v-if="hasNegotiation" style="margin-bottom: 0.75rem;">
-      <button
-        style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.5rem 1rem; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; cursor: pointer; border-left: 4px solid #ea580c;"
-        @click="verhandlungOffen = !verhandlungOffen"
-      >
-        <span style="font-size: 0.78rem;">{{ verhandlungOffen ? '&#9660;' : '&#9654;' }}</span>
-        <h3 style="margin: 0; font-size: 0.78rem; font-weight: 600; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
+    <!-- === NEGOTIATION (visible when content exists, amber highlight) === -->
+    <div v-if="hasNegotiation" style="background: #fff7ed; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid #fed7aa; border-left: 4px solid #ea580c; margin-bottom: 0.75rem;">
+      <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.35rem;">
+        <span style="font-size: 0.9rem;">&#9878;</span>
+        <h3 style="margin: 0; font-size: 0.85rem; font-weight: 700; color: #9a3412; text-transform: uppercase; letter-spacing: 0.03em;">Verhandlung</h3>
         <span v-if="te?.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0.05rem 0.35rem; border-radius: 3px; font-weight: 500;">Manuell</span>
-      </button>
-      <div v-if="verhandlungOffen" style="padding: 0.6rem 1rem; background: #fff7ed; border: 1px solid #fed7aa; border-top: none; border-radius: 0 0 6px 6px;">
-        <div v-if="te?.negotiation_override" style="font-size: 0.85rem; color: #9a3412; line-height: 1.4; white-space: pre-wrap;">{{ te.negotiation_override }}</div>
-        <ul v-else style="margin: 0; padding-left: 1.1rem; list-style: disc;">
-          <li v-for="(item, i) in effectiveNegotiation.slice(0, 3)" :key="i" style="margin-bottom: 0.15rem; line-height: 1.4; font-size: 0.85rem; color: #9a3412;">{{ item }}</li>
-        </ul>
-        <div v-if="te?.negotiation_override && effectiveNegotiation.length" style="margin-top: 0.5rem; padding: 0.4rem 0.6rem; background: #fef3c7; border-radius: 4px; font-size: 0.75rem; color: #92400e;">
-          <strong>KI-Original:</strong> {{ effectiveNegotiation.slice(0, 2).join(' · ') }}
-        </div>
+      </div>
+      <!-- Override takes priority -->
+      <div v-if="te?.negotiation_override" style="font-size: 0.88rem; color: #9a3412; line-height: 1.45; white-space: pre-wrap;">{{ te.negotiation_override }}</div>
+      <!-- AI negotiation -->
+      <ul v-else-if="effectiveNegotiation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+        <li v-for="(item, i) in effectiveNegotiation.slice(0, 3)" :key="i" style="margin-bottom: 0.15rem; line-height: 1.4; font-size: 0.88rem; color: #9a3412;">{{ item }}</li>
+      </ul>
+      <!-- Show AI original when override is active -->
+      <div v-if="te?.negotiation_override && effectiveNegotiation.length" style="margin-top: 0.5rem; padding: 0.4rem 0.6rem; background: #fef3c7; border-radius: 4px; font-size: 0.75rem; color: #92400e;">
+        <strong>KI-Original:</strong> {{ effectiveNegotiation.slice(0, 2).join(' · ') }}
       </div>
     </div>
 
@@ -139,40 +137,7 @@
       >Speichern</button>
     </div>
 
-    <!-- === PRÜFSTATUS (compact) === -->
-    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-      <span style="font-size: 0.78rem; color: #6b7280; font-weight: 500;">Prüfstatus:</span>
-      <div style="display: flex; gap: 0.25rem;">
-        <button
-          v-for="s in statusOptionen"
-          :key="s"
-          :style="{
-            background: f.pruef_status === s ? '#2563eb' : '#f3f4f6',
-            color: f.pruef_status === s ? 'white' : '#6b7280',
-            padding: '0.2rem 0.55rem',
-            borderRadius: '4px',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: '0.72rem',
-          }"
-          @click="setStatus(s)"
-        >{{ s }}</button>
-      </div>
-      <div style="flex: 1; display: flex; gap: 0.35rem; align-items: center; min-width: 200px;">
-        <input
-          v-model="kommentar"
-          placeholder="Prüfkommentar..."
-          style="flex: 1; padding: 0.25rem 0.4rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.78rem; font-family: inherit;"
-          @keyup.enter="speichern"
-        >
-        <button
-          style="background: #e5e7eb; color: #374151; padding: 0.2rem 0.5rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.72rem; white-space: nowrap;"
-          @click="speichern"
-        >Speichern</button>
-      </div>
-    </div>
-
-    <!-- === CONTEXT (collapsible) === -->
+    <!-- === EVIDENCE / KONTEXT (collapsible) === -->
     <div style="margin-bottom: 0.75rem;">
       <button
         style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.5rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer;"
@@ -214,6 +179,54 @@
       </div>
     </div>
 
+    <!-- === ANALYSEBEGRÜNDUNG (collapsible, long explanation moved here) === -->
+    <div v-if="f.erklaerung" style="margin-bottom: 0.75rem;">
+      <button
+        style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.5rem 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer;"
+        :style="{ borderRadius: begruendungOffen ? '6px 6px 0 0' : '6px' }"
+        @click="begruendungOffen = !begruendungOffen"
+      >
+        <span style="font-size: 0.78rem;">{{ begruendungOffen ? '&#9660;' : '&#9654;' }}</span>
+        <span style="font-size: 0.82rem; font-weight: 500; color: #374151;">Analysebegründung</span>
+      </button>
+      <div v-if="begruendungOffen" style="border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 6px 6px; padding: 0.75rem 1rem;">
+        <div style="white-space: pre-wrap; line-height: 1.5; font-size: 0.85rem; color: #374151;">{{ f.erklaerung }}</div>
+      </div>
+    </div>
+
+    <!-- === PRÜFSTATUS (compact) === -->
+    <div style="background: white; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+      <span style="font-size: 0.78rem; color: #6b7280; font-weight: 500;">Prüfstatus:</span>
+      <div style="display: flex; gap: 0.25rem;">
+        <button
+          v-for="s in statusOptionen"
+          :key="s"
+          :style="{
+            background: f.pruef_status === s ? '#2563eb' : '#f3f4f6',
+            color: f.pruef_status === s ? 'white' : '#6b7280',
+            padding: '0.2rem 0.55rem',
+            borderRadius: '4px',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.72rem',
+          }"
+          @click="setStatus(s)"
+        >{{ s }}</button>
+      </div>
+      <div style="flex: 1; display: flex; gap: 0.35rem; align-items: center; min-width: 200px;">
+        <input
+          v-model="kommentar"
+          placeholder="Prüfkommentar..."
+          style="flex: 1; padding: 0.25rem 0.4rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.78rem; font-family: inherit;"
+          @keyup.enter="speichern"
+        >
+        <button
+          style="background: #e5e7eb; color: #374151; padding: 0.2rem 0.5rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.72rem; white-space: nowrap;"
+          @click="speichern"
+        >Speichern</button>
+      </div>
+    </div>
+
     <!-- === METADATA (compact, always visible) === -->
     <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.75rem; color: #6b7280; display: flex; gap: 1.25rem; flex-wrap: wrap;">
       <span v-if="f.evidence_page_from"><strong>Seite:</strong> {{ f.evidence_page_from }}{{ f.evidence_page_to && f.evidence_page_to !== f.evidence_page_from ? '–' + f.evidence_page_to : '' }}</span>
@@ -225,6 +238,12 @@
       <span><strong>Quelle:</strong> {{ f.quelle_pass || 'unbekannt' }}</span>
       <span><strong>Erstellt:</strong> {{ datum(f.erstellt_am) }}</span>
     </div>
+
+    <!-- === DEBUG TRACE (dev only, shows data source for key fields) === -->
+    <details v-if="debugTrace" style="margin-top: 0.75rem; font-size: 0.7rem; color: #9ca3af;">
+      <summary style="cursor: pointer;">Debug: Datenquellen-Trace</summary>
+      <pre style="margin-top: 0.25rem; padding: 0.5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; white-space: pre-wrap; font-family: monospace;">{{ debugTrace }}</pre>
+    </details>
   </div>
   <div v-else style="padding: 2rem; text-align: center; color: #6b7280;">Wird geladen...</div>
 </template>
@@ -243,8 +262,8 @@ const kommentar = ref("");
 const statusOptionen = ["Offen", "Bestätigt", "Abgelehnt", "Zurückgestellt"];
 
 // Collapsible sections
-const verhandlungOffen = ref(false);
 const kontextOffen = ref(false);
+const begruendungOffen = ref(false);
 const overridesOffen = ref(false);
 
 const d = computed<FundstelleDetailType | null>(() => f.value?.detail ?? null);
@@ -283,39 +302,103 @@ async function saveDecision() {
   }
 }
 
-// --- Display computeds ---
+// --- Helper: truncate to N words ---
+function truncateWords(text: string, maxWords: number): string {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return text;
+  return words.slice(0, maxWords).join(" ") + "…";
+}
 
+// --- Display computeds with strict resolution chains ---
+
+// TITLE resolution: theme editorial title → theme title → truncated problem_summary → truncated kurzbeschreibung
+// [DEBUG:title] — source tracked in debugTrace
 const displayTitel = computed(() => {
-  if (te.value?.titel) return te.value.titel;
+  // 1. Parent theme title from editorial (theme.titel passed through)
+  if (te.value?.titel) return truncateWords(te.value.titel, 8);
+  // 2. Truncated problem_summary as title fallback
+  if (te.value?.problem_summary) return truncateWords(te.value.problem_summary, 8);
+  // 3. Theme kurzbeschreibung (editorial summary)
+  if (te.value?.kurzbeschreibung) return truncateWords(te.value.kurzbeschreibung, 8);
+  // 4. Last resort: finding kurzbeschreibung, hard-truncated
   const kb = f.value?.kurzbeschreibung || "";
-  const words = kb.split(/\s+/);
-  if (words.length <= 8) return kb;
-  return words.slice(0, 8).join(" ") + "…";
+  return truncateWords(kb, 8);
 });
 
+// Track which source provided the title
+const titleSource = computed(() => {
+  if (te.value?.titel) return "theme.titel";
+  if (te.value?.problem_summary) return "theme.final_editorial.problem_summary (truncated)";
+  if (te.value?.kurzbeschreibung) return "theme.final_editorial.kurzbeschreibung (truncated)";
+  return "fundstelle.kurzbeschreibung (last resort)";
+});
+
+// RISIKOSTUFE: prefer theme-level over finding-level
+const displayRisikostufe = computed(() => {
+  return te.value?.risikostufe || f.value?.risikostufe || "Mittel";
+});
+
+// KATEGORIE: prefer theme-level over finding-level
+const displayKategorie = computed(() => {
+  return te.value?.kategorie || f.value?.kategorie || "";
+});
+
+// PROBLEM SUMMARY resolution: editorial problem_summary → editorial kurzbeschreibung → finding kurzbeschreibung
+// [DEBUG:problem_summary]
 const displayProblemSummary = computed(() => {
   if (te.value?.problem_summary) return te.value.problem_summary;
+  if (te.value?.kurzbeschreibung) return te.value.kurzbeschreibung;
   return f.value?.kurzbeschreibung || "";
 });
 
+const problemSummarySource = computed(() => {
+  if (te.value?.problem_summary) return "theme.final_editorial.problem_summary";
+  if (te.value?.kurzbeschreibung) return "theme.final_editorial.kurzbeschreibung";
+  return "fundstelle.kurzbeschreibung (fallback)";
+});
+
+// IMPACT: only from editorial
 const displayImpact = computed(() => te.value?.impact?.length ? te.value.impact : []);
 
-// Effective AI recommendation (before override check)
-const effectiveRecommendation = computed(() => {
+// RECOMMENDATION resolution (AI content, before override check):
+// 1. theme.final_editorial.recommendation (array)
+// 2. theme.final_editorial.kurzbeschreibung as single-item (legacy: editorial had no structured recommendation)
+// 3. finding.empfehlung (legacy string from detection pass)
+// [DEBUG:recommendation]
+const effectiveRecommendation = computed<string[]>(() => {
   if (te.value?.recommendation?.length) return te.value.recommendation;
   if (f.value?.empfehlung) return [f.value.empfehlung];
   return [];
 });
 
-// Effective AI negotiation (before override check)
-const effectiveNegotiation = computed(() => {
+const recommendationSource = computed(() => {
+  if (te.value?.recommendation_override) return "OVERRIDE: theme.recommendation_override";
+  if (te.value?.recommendation?.length) return "theme.final_editorial.recommendation";
+  if (f.value?.empfehlung) return "fundstelle.empfehlung (legacy)";
+  return "FALLBACK: generic message";
+});
+
+// NEGOTIATION resolution (AI content, before override check):
+// 1. theme.final_editorial.negotiation (array)
+// 2. theme.final_editorial.verhandlungsargumente (legacy array)
+// 3. finding.detail.verhandlungsargumente (legacy string)
+// [DEBUG:negotiation]
+const effectiveNegotiation = computed<string[]>(() => {
   if (te.value?.negotiation?.length) return te.value.negotiation;
   if (te.value?.verhandlungsargumente?.length) return te.value.verhandlungsargumente;
   if (d.value?.verhandlungsargumente) return [d.value.verhandlungsargumente];
   return [];
 });
 
-// Whether negotiation section has any content (override or AI)
+const negotiationSource = computed(() => {
+  if (te.value?.negotiation_override) return "OVERRIDE: theme.negotiation_override";
+  if (te.value?.negotiation?.length) return "theme.final_editorial.negotiation";
+  if (te.value?.verhandlungsargumente?.length) return "theme.final_editorial.verhandlungsargumente (legacy)";
+  if (d.value?.verhandlungsargumente) return "fundstelle.detail.verhandlungsargumente (legacy)";
+  return "HIDDEN: no negotiation data";
+});
+
+// Whether negotiation section should be visible
 const hasNegotiation = computed(() => {
   return !!(te.value?.negotiation_override) || effectiveNegotiation.value.length > 0;
 });
@@ -326,6 +409,25 @@ const displayAlternativ = computed(() => {
 
 const displayBieterfrage = computed(() => {
   return te.value?.bieterfrage || d.value?.bieterfrage || "";
+});
+
+// DEBUG TRACE: shows which data source populated each key field
+const debugTrace = computed(() => {
+  if (!f.value) return "";
+  return [
+    `title: ${titleSource.value}`,
+    `  → "${displayTitel.value}"`,
+    `problem_summary: ${problemSummarySource.value}`,
+    `  → "${displayProblemSummary.value?.substring(0, 80)}${(displayProblemSummary.value?.length || 0) > 80 ? '...' : ''}"`,
+    `recommendation: ${recommendationSource.value}`,
+    `  → [${effectiveRecommendation.value.length} items]`,
+    `negotiation: ${negotiationSource.value}`,
+    `  → [${effectiveNegotiation.value.length} items]`,
+    `risikostufe: ${te.value?.risikostufe ? 'theme' : 'fundstelle'} → "${displayRisikostufe.value}"`,
+    `kategorie: ${te.value?.kategorie ? 'theme' : 'fundstelle'} → "${displayKategorie.value}"`,
+    `thema_editorial present: ${!!te.value}`,
+    `thema_id: ${te.value?.thema_id || 'none'}`,
+  ].join("\n");
 });
 
 const highlightedScopeText = computed(() => {
@@ -406,6 +508,15 @@ async function laden() {
       overridesOffen.value = true;
     }
   }
+  // [DEBUG] Log resolved data sources to console
+  console.debug("[FundstelleDetail] Data source trace:", {
+    title: titleSource.value,
+    problem_summary: problemSummarySource.value,
+    recommendation: recommendationSource.value,
+    negotiation: negotiationSource.value,
+    thema_editorial_present: !!teData,
+    thema_id: teData?.thema_id,
+  });
 }
 
 async function setStatus(status: string) {

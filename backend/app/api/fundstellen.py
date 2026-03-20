@@ -283,11 +283,14 @@ async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(g
         .limit(1)
     )
     thema = result.scalar_one_or_none()
-    if thema and thema.final_editorial:
-        ed = thema.final_editorial
+    if thema:
+        ed = thema.final_editorial or {}
         thema_editorial = ThemaEditorialContext(
             thema_id=thema.id,
             titel=thema.titel,
+            kategorie=thema.kategorie,
+            risikostufe=thema.risikostufe,
+            kurzbeschreibung=ed.get("kurzbeschreibung", thema.beschreibung or ""),
             problem_summary=ed.get("problem_summary", ""),
             impact=ed.get("impact", []),
             recommendation=ed.get("recommendation", []),
