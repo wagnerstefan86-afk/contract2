@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,6 +14,8 @@ from app.models.fundstelle import Fundstelle
 from app.models.risikothema import RisikoThema, risikothema_fundstellen
 from app.schemas.fundstelle import FundstelleResponse, FundstelleDetailResponse, FundstelleUpdate, ThemaEditorialContext
 from app.api.risikothemen import _build_evidences
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fundstellen", tags=["Fundstellen"])
 
@@ -273,8 +276,30 @@ async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(g
     if not fundstelle:
         raise HTTPException(status_code=404, detail="Fundstelle nicht gefunden")
 
-    # Look up parent theme editorial data
-    thema_editorial = None
+    thema_editorial = await _build_thema_editorial(fundstelle, db)
+
+    resp = FundstelleDetailResponse.model_validate(fundstelle)
+    resp.thema_editorial = thema_editorial
+    return resp
+
+
+async def _build_thema_editorial(fundstelle: Fundstelle, db: AsyncSession) -> ThemaEditorialContext:
+    """Build ThemaEditorialContext with fallback mapping.
+
+    Resolution strategy:
+    1. Try final_selected theme with editorial JSONB
+    2. Try any linked (non-final) theme
+    3. Build minimal editorial from fundstelle's own fields
+
+    Within each level, map old fields → new structured fields when new ones are empty:
+    - recommendation[] ← alternativformulierung, empfehlung
+    - negotiation[] ← verhandlungsargumente, bieterfrage
+    - problem_summary ← kurzbeschreibung
+    """
+    fundstelle_id = fundstelle.id
+    field_sources: dict[str, str] = {}
+
+    # --- Strategy 1: Final-selected theme ---
     result = await db.execute(
         select(RisikoThema)
         .join(risikothema_fundstellen, RisikoThema.id == risikothema_fundstellen.c.risikothema_id)
@@ -283,31 +308,190 @@ async def fundstelle_detail(fundstelle_id: uuid.UUID, user: Benutzer = Depends(g
         .limit(1)
     )
     thema = result.scalar_one_or_none()
+
+    # --- Strategy 2: Any linked theme (non-final) ---
+    if not thema:
+        result = await db.execute(
+            select(RisikoThema)
+            .join(risikothema_fundstellen, RisikoThema.id == risikothema_fundstellen.c.risikothema_id)
+            .where(risikothema_fundstellen.c.fundstelle_id == fundstelle_id)
+            .limit(1)
+        )
+        thema = result.scalar_one_or_none()
+        if thema:
+            field_sources["theme_type"] = "non-final linked theme"
+
     if thema:
         ed = thema.final_editorial or {}
-        thema_editorial = ThemaEditorialContext(
+        if not field_sources.get("theme_type"):
+            field_sources["theme_type"] = "final_selected theme"
+
+        # --- Title: always from theme ---
+        titel = thema.titel or ""
+        field_sources["titel"] = f"thema.titel='{titel[:40]}'"
+
+        # --- Kurzbeschreibung ---
+        kurzbeschreibung = ed.get("kurzbeschreibung") or thema.beschreibung or fundstelle.kurzbeschreibung or ""
+        field_sources["kurzbeschreibung"] = (
+            "ed.kurzbeschreibung" if ed.get("kurzbeschreibung")
+            else "thema.beschreibung" if thema.beschreibung
+            else "fundstelle.kurzbeschreibung"
+        )
+
+        # --- Problem summary: fallback to kurzbeschreibung ---
+        problem_summary = ed.get("problem_summary") or ""
+        if not problem_summary:
+            problem_summary = kurzbeschreibung
+            field_sources["problem_summary"] = "FALLBACK→kurzbeschreibung"
+        else:
+            field_sources["problem_summary"] = "ed.problem_summary"
+
+        # --- Impact ---
+        impact = ed.get("impact", [])
+        field_sources["impact"] = f"ed.impact[{len(impact)}]"
+
+        # --- Recommendation: fallback to old fields ---
+        recommendation = ed.get("recommendation", [])
+        if recommendation:
+            field_sources["recommendation"] = f"ed.recommendation[{len(recommendation)}]"
+        else:
+            recommendation = _synthesize_recommendation(ed, fundstelle)
+            field_sources["recommendation"] = f"SYNTHESIZED[{len(recommendation)}] from alternativformulierung/empfehlung"
+
+        # --- Negotiation: fallback to old fields ---
+        negotiation = ed.get("negotiation", [])
+        if negotiation:
+            field_sources["negotiation"] = f"ed.negotiation[{len(negotiation)}]"
+        else:
+            negotiation = _synthesize_negotiation(ed, fundstelle)
+            field_sources["negotiation"] = f"SYNTHESIZED[{len(negotiation)}] from verhandlungsargumente/bieterfrage"
+
+        # --- Remaining old fields (pass through) ---
+        warum = ed.get("warum_verhandlungsrelevant", "")
+        alternativ = ed.get("alternativformulierung", "")
+        bieterfrage = ed.get("bieterfrage", "")
+        verhandlungsargs = ed.get("verhandlungsargumente", [])
+
+        logger.info(
+            "[editorial-debug] fundstelle=%s thema=%s sources=%s",
+            fundstelle_id, thema.id, field_sources,
+        )
+
+        return ThemaEditorialContext(
             thema_id=thema.id,
-            titel=thema.titel,
-            kategorie=thema.kategorie,
-            risikostufe=thema.risikostufe,
-            kurzbeschreibung=ed.get("kurzbeschreibung", thema.beschreibung or ""),
-            problem_summary=ed.get("problem_summary", ""),
-            impact=ed.get("impact", []),
-            recommendation=ed.get("recommendation", []),
-            negotiation=ed.get("negotiation", []),
-            warum_verhandlungsrelevant=ed.get("warum_verhandlungsrelevant", ""),
-            alternativformulierung=ed.get("alternativformulierung", ""),
-            bieterfrage=ed.get("bieterfrage", ""),
-            verhandlungsargumente=ed.get("verhandlungsargumente", []),
+            titel=titel,
+            kategorie=thema.kategorie or fundstelle.kategorie or "",
+            risikostufe=thema.risikostufe or fundstelle.risikostufe or "Mittel",
+            kurzbeschreibung=kurzbeschreibung,
+            problem_summary=problem_summary,
+            impact=impact,
+            recommendation=recommendation,
+            negotiation=negotiation,
+            warum_verhandlungsrelevant=warum,
+            alternativformulierung=alternativ,
+            bieterfrage=bieterfrage,
+            verhandlungsargumente=verhandlungsargs,
             decision_status=thema.decision_status or "OPEN",
             decision_comment=thema.decision_comment,
             recommendation_override=thema.recommendation_override,
             negotiation_override=thema.negotiation_override,
         )
 
-    resp = FundstelleDetailResponse.model_validate(fundstelle)
-    resp.thema_editorial = thema_editorial
-    return resp
+    # --- Strategy 3: No linked theme at all — build from fundstelle ---
+    field_sources["theme_type"] = "NO_THEME (fundstelle-only)"
+    detail = fundstelle.detail or {}
+
+    recommendation = _synthesize_recommendation({}, fundstelle)
+    negotiation = _synthesize_negotiation_from_detail(detail)
+    problem_summary = fundstelle.kurzbeschreibung or ""
+
+    field_sources["recommendation"] = f"FUNDSTELLE[{len(recommendation)}]"
+    field_sources["negotiation"] = f"FUNDSTELLE_DETAIL[{len(negotiation)}]"
+    field_sources["problem_summary"] = "fundstelle.kurzbeschreibung"
+
+    logger.info(
+        "[editorial-debug] fundstelle=%s NO_THEME sources=%s",
+        fundstelle_id, field_sources,
+    )
+
+    return ThemaEditorialContext(
+        thema_id=None,
+        titel=_truncate_words(problem_summary, 8),
+        kategorie=fundstelle.kategorie or "",
+        risikostufe=fundstelle.risikostufe or "Mittel",
+        kurzbeschreibung=fundstelle.kurzbeschreibung or "",
+        problem_summary=problem_summary,
+        impact=[],
+        recommendation=recommendation,
+        negotiation=negotiation,
+        warum_verhandlungsrelevant="",
+        alternativformulierung=detail.get("alternativformulierung", ""),
+        bieterfrage=detail.get("bieterfrage", ""),
+        verhandlungsargumente=(
+            [detail["verhandlungsargumente"]] if isinstance(detail.get("verhandlungsargumente"), str) and detail["verhandlungsargumente"]
+            else detail.get("verhandlungsargumente", []) if isinstance(detail.get("verhandlungsargumente"), list)
+            else []
+        ),
+        decision_status="OPEN",
+        decision_comment=None,
+        recommendation_override=None,
+        negotiation_override=None,
+    )
+
+
+def _synthesize_recommendation(ed: dict, fundstelle: Fundstelle) -> list[str]:
+    """Build recommendation[] from old-model fields when new field is empty."""
+    items: list[str] = []
+    alt = ed.get("alternativformulierung", "")
+    if alt:
+        items.append(alt)
+    if fundstelle.empfehlung:
+        items.append(fundstelle.empfehlung)
+    return items
+
+
+def _synthesize_negotiation(ed: dict, fundstelle: Fundstelle) -> list[str]:
+    """Build negotiation[] from old-model fields when new field is empty."""
+    items: list[str] = []
+    verh = ed.get("verhandlungsargumente", [])
+    if isinstance(verh, list):
+        items.extend(verh)
+    elif isinstance(verh, str) and verh:
+        items.append(verh)
+    bf = ed.get("bieterfrage", "")
+    if bf:
+        items.append(bf)
+    # Also check fundstelle detail
+    detail = fundstelle.detail or {}
+    if not items:
+        dv = detail.get("verhandlungsargumente", "")
+        if isinstance(dv, str) and dv:
+            items.append(dv)
+        elif isinstance(dv, list):
+            items.extend(dv)
+    return items
+
+
+def _synthesize_negotiation_from_detail(detail: dict) -> list[str]:
+    """Build negotiation[] from fundstelle.detail when no theme exists."""
+    items: list[str] = []
+    dv = detail.get("verhandlungsargumente", "")
+    if isinstance(dv, str) and dv:
+        items.append(dv)
+    elif isinstance(dv, list):
+        items.extend(dv)
+    bf = detail.get("bieterfrage", "")
+    if bf:
+        items.append(bf)
+    return items
+
+
+def _truncate_words(text: str, max_words: int) -> str:
+    """Truncate text to max_words."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]) + "…"
 
 
 @router.patch("/{fundstelle_id}", response_model=FundstelleResponse)
