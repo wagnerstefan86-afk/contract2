@@ -104,113 +104,82 @@
       <div
         v-for="thema in filteredSortedThemen"
         :key="thema.id"
-        :style="{ background: 'white', borderRadius: '8px', marginBottom: '0.75rem', overflow: 'hidden', borderTop: '1px solid #e5e7eb', borderRight: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', borderLeft: `5px solid ${risikoFarbe(thema.risikostufe)}` }"
+        :style="{ background: 'white', borderRadius: '6px', marginBottom: '0.5rem', overflow: 'hidden', border: '1px solid #e5e7eb', borderLeft: `4px solid ${risikoFarbe(thema.risikostufe)}` }"
       >
-        <!-- HEADER — clickable, opens detail page for primary evidence -->
+        <!-- HEADER — compact: badge + title + decision + arrow -->
         <router-link
           :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
-          style="display: block; padding: 0.75rem 1rem 0; text-decoration: none; color: inherit;"
+          style="display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.75rem; text-decoration: none; color: inherit; flex-wrap: wrap;"
         >
-          <div style="display: flex; align-items: flex-start; justify-content: space-between;">
-            <div style="flex: 1; min-width: 0;">
-              <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                <StatusBadge :status="thema.risikostufe" />
-                <strong style="font-size: 1rem; color: #111827;">{{ thema.titel }}</strong>
-                <DecisionBadge :status="thema.decision_status || 'OPEN'" />
-              </div>
-              <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.3rem;">
-                <span style="background: #f3f4f6; color: #6b7280; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500;">{{ thema.kategorie }}</span>
-                <span style="color: #9ca3af; font-size: 0.75rem;">{{ thema.fundstellen.length }} {{ thema.fundstellen.length === 1 ? 'Evidenz' : 'Evidenzen' }}</span>
-              </div>
-            </div>
-            <span style="color: #9ca3af; font-size: 1rem; margin-left: 0.5rem; margin-top: 0.2rem;" title="Details anzeigen">&#8594;</span>
-          </div>
+          <StatusBadge :status="thema.risikostufe" />
+          <strong style="font-size: 0.92rem; color: #111827; flex: 1; min-width: 0;">{{ thema.titel }}</strong>
+          <DecisionBadge :status="thema.decision_status || 'OPEN'" />
+          <span style="color: #d1d5db; font-size: 0.85rem;">&rarr;</span>
         </router-link>
 
-        <!-- PROBLEM — max 2 lines -->
-        <div style="padding: 0.35rem 1rem 0.5rem; font-size: 0.85rem; color: #374151; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
-          {{ truncate(thema.problem_summary || thema.kurzbeschreibung, 180) }}
+        <!-- PROBLEM — single muted line under header -->
+        <div style="padding: 0 0.75rem 0.35rem; font-size: 0.8rem; color: #6b7280; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+          {{ truncate(thema.problem_summary || thema.kurzbeschreibung, 160) }}
+          <span style="color: #9ca3af; font-size: 0.7rem; margin-left: 0.35rem;">{{ thema.kategorie }} · {{ thema.fundstellen.length }} Evidenz{{ thema.fundstellen.length !== 1 ? 'en' : '' }}</span>
         </div>
 
-        <!-- IMPACT — optional, max 2 bullets -->
-        <div v-if="thema.impact && thema.impact.length" style="padding: 0 1rem 0.5rem;">
-          <ul style="margin: 0; padding-left: 1.1rem; list-style: disc;">
-            <li
-              v-for="(imp, ii) in thema.impact.slice(0, 2)"
-              :key="ii"
-              style="font-size: 0.8rem; color: #991b1b; line-height: 1.35; margin-bottom: 0.1rem;"
-            >{{ truncate(imp, 80) }}</li>
-          </ul>
-        </div>
-
-        <!-- RECOMMENDATION — always visible, highlighted -->
-        <!-- If override exists, show override; otherwise show AI recommendation -->
-        <div style="padding: 0.5rem 1rem; background: #f0fdf4; border-top: 1px solid #dcfce7;">
-          <div style="display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.25rem;">
-            <span style="font-size: 0.85rem;">&#9989;</span>
-            <strong style="font-size: 0.75rem; color: #166534; text-transform: uppercase; letter-spacing: 0.03em;">Empfehlung</strong>
-            <span v-if="thema.recommendation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px; margin-left: 0.25rem;">Manuell</span>
+        <!-- RECOMMENDATION — always visible, lightweight green strip -->
+        <div style="padding: 0.35rem 0.75rem; background: #f0fdf4; border-top: 1px solid #dcfce7;">
+          <div v-if="thema.recommendation_override" style="font-size: 0.78rem; color: #15803d; line-height: 1.3;">
+            <span style="font-size: 0.6rem; color: #2563eb; background: #dbeafe; padding: 0 0.25rem; border-radius: 2px; margin-right: 0.25rem;">Manuell</span>
+            {{ truncate(thema.recommendation_override, 140) }}
           </div>
-          <div v-if="thema.recommendation_override" style="font-size: 0.8rem; color: #15803d; line-height: 1.35;">
-            {{ truncate(thema.recommendation_override, 160) }}
-          </div>
-          <ul v-else-if="thema.recommendation && thema.recommendation.length" style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+          <ul v-else-if="thema.recommendation && thema.recommendation.length" style="margin: 0; padding-left: 1rem; list-style: disc;">
             <li
               v-for="(r, ri) in thema.recommendation.slice(0, 2)"
               :key="ri"
-              style="font-size: 0.8rem; color: #15803d; line-height: 1.35; margin-bottom: 0.1rem;"
-            >{{ truncate(r, 80) }}</li>
+              style="font-size: 0.78rem; color: #15803d; line-height: 1.3; margin-bottom: 0.05rem;"
+            >{{ truncate(r, 75) }}</li>
           </ul>
-          <div v-else style="font-size: 0.8rem; color: #6b7280; font-style: italic;">Empfehlung wird generiert...</div>
+          <div v-else style="font-size: 0.78rem; color: #9ca3af;">Empfehlung wird generiert...</div>
         </div>
 
         <!-- NEGOTIATION — collapsed toggle, hidden if empty -->
-        <div v-if="(thema.negotiation_override) || (thema.negotiation && thema.negotiation.length)" style="border-top: 1px solid #e5e7eb;">
+        <div v-if="(thema.negotiation_override) || (thema.negotiation && thema.negotiation.length)" style="border-top: 1px solid #f3f4f6;">
           <button
-            style="display: flex; align-items: center; gap: 0.35rem; width: 100%; padding: 0.4rem 1rem; background: none; border: none; cursor: pointer; font-size: 0.78rem; color: #9a3412;"
+            style="display: flex; align-items: center; gap: 0.25rem; width: 100%; padding: 0.3rem 0.75rem; background: none; border: none; cursor: pointer; font-size: 0.72rem; color: #9a3412;"
             @click.prevent="toggleVerhandlung(thema.id)"
           >
             <span>{{ offeneVerhandlungen.has(thema.id) ? '&#9660;' : '&#9654;' }}</span>
-            <span>Verhandlung anzeigen</span>
-            <span v-if="thema.negotiation_override" style="font-size: 0.65rem; color: #2563eb; background: #dbeafe; padding: 0 0.3rem; border-radius: 3px; margin-left: 0.25rem;">Manuell</span>
+            <span>Verhandlung</span>
+            <span v-if="thema.negotiation_override" style="font-size: 0.6rem; color: #2563eb; background: #dbeafe; padding: 0 0.25rem; border-radius: 2px; margin-left: 0.2rem;">Manuell</span>
           </button>
-          <div v-if="offeneVerhandlungen.has(thema.id)" style="padding: 0 1rem 0.5rem;">
-            <div v-if="thema.negotiation_override" style="font-size: 0.8rem; color: #9a3412; line-height: 1.35;">
-              {{ truncate(thema.negotiation_override, 160) }}
+          <div v-if="offeneVerhandlungen.has(thema.id)" style="padding: 0 0.75rem 0.35rem;">
+            <div v-if="thema.negotiation_override" style="font-size: 0.78rem; color: #9a3412; line-height: 1.3;">
+              {{ truncate(thema.negotiation_override, 140) }}
             </div>
-            <ul v-else style="margin: 0; padding-left: 1.1rem; list-style: disc;">
+            <ul v-else style="margin: 0; padding-left: 1rem; list-style: disc;">
               <li
                 v-for="(n, ni) in thema.negotiation.slice(0, 2)"
                 :key="ni"
-                style="font-size: 0.8rem; color: #9a3412; line-height: 1.35; margin-bottom: 0.1rem;"
-              >{{ truncate(n, 80) }}</li>
+                style="font-size: 0.78rem; color: #9a3412; line-height: 1.3; margin-bottom: 0.05rem;"
+              >{{ truncate(n, 75) }}</li>
             </ul>
           </div>
         </div>
 
-        <!-- DECISION CONTROLS — compact segmented control -->
-        <div style="padding: 0.45rem 1rem; border-top: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; gap: 0.2rem; flex-wrap: wrap;">
-            <button
-              v-for="ds in decisionStates"
-              :key="ds.value"
-              :style="{
-                padding: '0.2rem 0.45rem',
-                fontSize: '0.68rem',
-                borderRadius: '4px',
-                border: (thema.decision_status || 'OPEN') === ds.value ? `1px solid ${ds.activeColor}` : '1px solid #e5e7eb',
-                background: (thema.decision_status || 'OPEN') === ds.value ? ds.activeBg : 'white',
-                color: (thema.decision_status || 'OPEN') === ds.value ? ds.activeColor : '#9ca3af',
-                cursor: 'pointer',
-                fontWeight: (thema.decision_status || 'OPEN') === ds.value ? '600' : '400',
-              }"
-              @click.prevent="setDecision(thema.id, ds.value)"
-            >{{ ds.label }}</button>
-          </div>
-          <router-link
-            :to="`/pruefung/${thema.fundstellen[0]?.id || ''}`"
-            style="font-size: 0.78rem; color: #2563eb; text-decoration: none; white-space: nowrap;"
-          >Details &#8594;</router-link>
+        <!-- DECISION — ultra-compact inline row -->
+        <div style="padding: 0.3rem 0.75rem; border-top: 1px solid #f3f4f6; display: flex; align-items: center; gap: 0.15rem;">
+          <button
+            v-for="ds in decisionStates"
+            :key="ds.value"
+            :style="{
+              padding: '0.15rem 0.35rem',
+              fontSize: '0.62rem',
+              borderRadius: '3px',
+              border: (thema.decision_status || 'OPEN') === ds.value ? `1px solid ${ds.activeColor}` : '1px solid #f3f4f6',
+              background: (thema.decision_status || 'OPEN') === ds.value ? ds.activeBg : 'transparent',
+              color: (thema.decision_status || 'OPEN') === ds.value ? ds.activeColor : '#d1d5db',
+              cursor: 'pointer',
+              fontWeight: (thema.decision_status || 'OPEN') === ds.value ? '600' : '400',
+            }"
+            @click.prevent="setDecision(thema.id, ds.value)"
+          >{{ ds.label }}</button>
         </div>
       </div>
 
@@ -413,7 +382,7 @@
       <p v-else style="color: #6b7280;">Keine Fundstellen vorhanden.</p>
     </div>
 
-    <div v-else style="background: white; padding: 2rem; border-radius: 6px; text-align: center; color: #6b7280;">
+    <div v-else-if="ansicht === 'flat' || ansicht === 'gruppiert'" style="padding: 1.5rem; text-align: center; color: #9ca3af; font-size: 0.85rem;">
       Keine Fundstellen vorhanden.
     </div>
 
