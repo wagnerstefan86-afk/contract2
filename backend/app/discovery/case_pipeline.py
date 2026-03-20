@@ -200,7 +200,20 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
             "llm_calls_total": throttle.stats.get("total_requests", 0),
         }
 
-        case.status = CaseStatus.COMPLETED.value
+        # Determine final status: partial if LLM steps had errors but findings exist
+        has_step_errors = any(w.startswith(("SCREENING_ERROR:", "EXTRACTION_ERROR:", "CLUSTERING_ERROR:", "CONSOLIDATION_ERROR:", "EDITORIAL_ERROR:")) for w in pipeline_warnings)
+        has_findings = extract_metrics.get("total_findings", 0) > 0
+        if has_step_errors and has_findings:
+            case.status = CaseStatus.PARTIAL.value
+            case.failure_reason = (
+                f"{sum(1 for w in pipeline_warnings if '_ERROR:' in w)} Schritt(e) fehlgeschlagen. "
+                f"Ergebnisse basieren auf den erfolgreichen Schritten."
+            )
+        elif has_step_errors and not has_findings:
+            case.status = CaseStatus.FAILED.value
+            case.failure_reason = "Alle Analyseschritte fehlgeschlagen — keine Ergebnisse."
+        else:
+            case.status = CaseStatus.COMPLETED.value
         case.finished_at = datetime.utcnow()
         await db.commit()
 
@@ -212,11 +225,25 @@ async def run_case_pipeline(case_id: uuid.UUID, db: AsyncSession) -> None:
     except Exception as e:
         logger.exception(f"Case pipeline fehlgeschlagen: {e}")
         case.status = CaseStatus.FAILED.value
-        case.failure_reason = str(e)
+        case.failure_reason = _case_user_facing_error(e)
         case.finished_at = datetime.utcnow()
-        pipeline_warnings.append(f"PIPELINE_FATAL: {e}")
+        pipeline_warnings.append(f"PIPELINE_FATAL: {type(e).__name__}: {e}")
         case.pipeline_warnings = pipeline_warnings
         await db.commit()
+
+
+def _case_user_facing_error(e: Exception) -> str:
+    """Convert an exception to a user-friendly message for case pipeline."""
+    msg = str(e).lower()
+    if "429" in msg or "rate" in msg:
+        return "Die KI-Schnittstelle ist vorübergehend überlastet. Bitte versuchen Sie es in einigen Minuten erneut."
+    if "401" in msg or "auth" in msg or "api_key" in msg:
+        return "Der KI-API-Schlüssel ist ungültig oder fehlt. Bitte prüfen Sie die Einstellungen."
+    if "timeout" in msg:
+        return "Die KI-Anfrage hat zu lange gedauert. Bitte erneut versuchen."
+    if any(code in msg for code in ("500", "502", "503")):
+        return "Der KI-Dienst ist vorübergehend nicht erreichbar. Bitte später erneut versuchen."
+    return "Bei der Analyse ist ein unerwarteter Fehler aufgetreten. Bitte versuchen Sie es erneut."
 
 
 async def _create_job(

@@ -20,6 +20,7 @@ class AnalyseStatus(str, enum.Enum):
     KONSOLIDIERUNG = "Konsolidierung"
     EDITORIAL = "Final Editorial Pass"
     ABGESCHLOSSEN = "Abgeschlossen"
+    TEILWEISE_ABGESCHLOSSEN = "Teilweise abgeschlossen"
     FEHLGESCHLAGEN = "Fehlgeschlagen"
 
 
@@ -35,6 +36,8 @@ class Analyse(Base):
     gestartet_am: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     beendet_am: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     fehler: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured error details (debug-only, not shown to users)
+    fehler_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Pipeline evaluation / debug data — written at end of analysis
     auswertung: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

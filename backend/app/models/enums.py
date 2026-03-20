@@ -16,6 +16,7 @@ class CaseStatus(str, enum.Enum):
     INGESTING = "Ingesting"
     PROCESSING = "Processing"
     COMPLETED = "Completed"
+    PARTIAL = "Partial"
     FAILED = "Failed"
     ARCHIVED = "Archived"
 

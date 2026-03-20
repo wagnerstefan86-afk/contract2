@@ -59,6 +59,9 @@ class LLMThrottle:
         self._lock = asyncio.Lock()
         self._total_requests: int = 0
         self._total_tokens_est: int = 0
+        self._total_retries: int = 0
+        self._rate_limit_hits: int = 0
+        self._server_errors: int = 0
 
     async def acquire(self, token_estimate: int = 0):
         """Acquire a slot, waiting if necessary."""
@@ -72,6 +75,14 @@ class LLMThrottle:
             self._total_requests += 1
             self._total_tokens_est += token_estimate
 
+    def record_retry(self, is_rate_limit: bool = False):
+        """Record a retry attempt for metrics."""
+        self._total_retries += 1
+        if is_rate_limit:
+            self._rate_limit_hits += 1
+        else:
+            self._server_errors += 1
+
     def release(self):
         self._semaphore.release()
 
@@ -80,6 +91,9 @@ class LLMThrottle:
         return {
             "total_requests": self._total_requests,
             "total_tokens_estimated": self._total_tokens_est,
+            "total_retries": self._total_retries,
+            "rate_limit_hits": self._rate_limit_hits,
+            "server_errors": self._server_errors,
         }
 
 
@@ -181,20 +195,26 @@ async def llm_completion(
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
-            is_retryable = (
-                "429" in error_str
-                or "rate" in error_str
-                or "500" in error_str
-                or "502" in error_str
-                or "503" in error_str
-                or "timeout" in error_str
-            )
+            is_rate_limit = "429" in error_str or "rate" in error_str
+            is_server_error = any(code in error_str for code in ("500", "502", "503"))
+            is_timeout = "timeout" in error_str
+            is_retryable = is_rate_limit or is_server_error or is_timeout
+
             if is_retryable and attempt < config.max_retries:
+                throttle.record_retry(is_rate_limit=is_rate_limit)
                 # Exponential backoff: 2s, 4s, 8s, 16s + jitter
                 delay = (2 ** (attempt + 1)) + random.uniform(0, 1)
+                error_type = (
+                    "RATE_LIMIT" if is_rate_limit
+                    else "SERVER_ERROR" if is_server_error
+                    else "TIMEOUT"
+                )
                 logger.warning(
-                    f"LLM-Aufruf fehlgeschlagen (Versuch {attempt + 1}/{config.max_retries + 1}): "
-                    f"{e}. Retry in {delay:.1f}s"
+                    f"LLM-Aufruf fehlgeschlagen [{error_type}] "
+                    f"(Versuch {attempt + 1}/{config.max_retries + 1}): "
+                    f"{e}. Retry in {delay:.1f}s "
+                    f"[retries_total={throttle.stats['total_retries']}, "
+                    f"rate_limits={throttle.stats['rate_limit_hits']}]"
                 )
                 await asyncio.sleep(delay)
             else:

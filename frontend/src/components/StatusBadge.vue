@@ -14,7 +14,8 @@ const farbe = computed(() => {
   if (s === "Kritisch") return "#991b1b";
   if (s === "Hoch" || s === "Fehler" || s === "Fehlgeschlagen") return "#dc2626";
   if (s === "Mittel" || s === "Warnung") return "#f59e0b";
-  if (s === "Niedrig" || s === "Bestätigt" || s === "Abgeschlossen" || s === "Analysiert") return "#16a34a";
+  if (s === "Niedrig" || s === "Bestätigt" || s === "Abgeschlossen" || s === "Analysiert" || s === "Completed") return "#16a34a";
+  if (s === "Teilweise abgeschlossen" || s === "Partial") return "#ea580c";
   if (s === "Offen" || s === "Hochgeladen" || s === "Gestartet") return "#6366f1";
   if (s === "Zurückgestellt" || s === "Archiviert") return "#6b7280";
   if (s.includes("läuft") || s === "Konsolidierung" || s === "In Analyse") return "#2563eb";

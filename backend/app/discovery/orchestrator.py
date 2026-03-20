@@ -93,13 +93,40 @@ async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession,
     except Exception as e:
         logger.exception(f"Discovery-Pipeline fehlgeschlagen: {e}")
         analyse.status = AnalyseStatus.FEHLGESCHLAGEN.value
-        analyse.fehler = str(e)
+        analyse.fehler = _user_facing_error(e)
+        analyse.fehler_details = {
+            "error_type": type(e).__name__,
+            "raw_message": str(e),
+            "traceback": traceback.format_exc(),
+        }
         analyse.beendet_am = datetime.utcnow()
         await _log(db, analyse.id, vertrag.id,
-                   f"Pipeline fehlgeschlagen: {e}",
+                   f"Pipeline fehlgeschlagen: {type(e).__name__}",
                    ebene=ProtokollEbene.FEHLER.value,
-                   details={"traceback": traceback.format_exc()})
+                   details=analyse.fehler_details)
         await db.commit()
+
+
+def _user_facing_error(e: Exception) -> str:
+    """Convert an exception to a user-friendly message.
+
+    Hides raw API error details, rate limit internals, and tracebacks.
+    """
+    msg = str(e).lower()
+    if "429" in msg or "rate" in msg:
+        return "Die KI-Schnittstelle ist vorübergehend überlastet. Bitte versuchen Sie es in einigen Minuten erneut."
+    if "401" in msg or "auth" in msg or "api_key" in msg or "api-schlüssel" in msg:
+        return "Der KI-API-Schlüssel ist ungültig oder fehlt. Bitte prüfen Sie die Einstellungen."
+    if "timeout" in msg:
+        return "Die KI-Anfrage hat zu lange gedauert (Zeitüberschreitung). Bitte erneut versuchen."
+    if any(code in msg for code in ("500", "502", "503")):
+        return "Der KI-Dienst ist vorübergehend nicht erreichbar. Bitte später erneut versuchen."
+    if "textextraktion" in msg:
+        return "Die Textextraktion aus dem Dokument ist fehlgeschlagen. Bitte prüfen Sie das Dateiformat."
+    if "zu wenig text" in msg:
+        return "Das Dokument enthält zu wenig Text für eine Analyse."
+    # Generic fallback — do NOT expose raw exception message
+    return "Bei der Analyse ist ein unerwarteter Fehler aufgetreten. Bitte versuchen Sie es erneut."
 
 
 async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
@@ -183,123 +210,113 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     all_raw_findings: list[RawFinding] = []
     # Raw findings per pass for debugging/evaluation (serialized to auswertung)
     roh_kandidaten_pro_pass: dict[str, list[dict]] = {}
+    # Track pass failures for partial success determination
+    pass_errors: list[dict] = []
+
+    # --- Helper to run a single pass with error isolation ---
+    async def _run_pass(
+        pass_obj, pass_name: str, pass_key: str,
+        status: str, progress: int,
+    ) -> tuple[list[RawFinding], float]:
+        """Run a discovery pass, returning findings and duration.
+
+        On failure: logs the error, records it in pass_errors, returns empty list.
+        The pipeline continues with the next pass.
+        """
+        await _update_analyse(db, analyse, status, pass_name, progress)
+        await _log(db, aid, vid, f"{pass_name} gestartet.")
+        await db.commit()
+
+        t = time.monotonic()
+        try:
+            findings = await pass_obj.run(segments, llm_config, full_text, perspective=perspective)
+            dur = round(time.monotonic() - t, 1)
+
+            cats = Counter(f.kategorie for f in findings)
+            auswertung["passes"][pass_key] = {
+                "kandidaten": len(findings),
+                "dauer_sekunden": dur,
+                "kategorien": dict(cats),
+                "status": "ok",
+            }
+
+            await _log(db, aid, vid,
+                       f"{pass_name} abgeschlossen: {len(findings)} Kandidaten in {dur}s.",
+                       details=auswertung["passes"][pass_key])
+            await db.commit()
+            return findings, dur
+
+        except Exception as e:
+            dur = round(time.monotonic() - t, 1)
+            logger.error(f"{pass_name} fehlgeschlagen: {e}", exc_info=True)
+            error_info = {
+                "pass": pass_name,
+                "error_type": type(e).__name__,
+                "message": str(e),
+            }
+            pass_errors.append(error_info)
+            auswertung["passes"][pass_key] = {
+                "kandidaten": 0,
+                "dauer_sekunden": dur,
+                "status": "failed",
+                "error": str(e),
+            }
+            await _log(db, aid, vid,
+                       f"{pass_name} fehlgeschlagen: {type(e).__name__}. Pipeline fährt fort.",
+                       ebene=ProtokollEbene.WARNUNG.value,
+                       details=error_info)
+            await db.commit()
+            return [], dur
 
     # Pass 1: Breite Ersterfassung
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_1.value, "Breite Ersterfassung", 15)
-    await _log(db, aid, vid, "Pass 1: Breite Ersterfassung gestartet.")
-    await db.commit()
-
-    t0 = time.monotonic()
-    pass1 = BreitPass()
-    findings_p1 = await pass1.run(segments, llm_config, full_text, perspective=perspective)
-    dur_p1 = round(time.monotonic() - t0, 1)
-
-    p1_cats = Counter(f.kategorie for f in findings_p1)
-    auswertung["passes"]["pass1_breit"] = {
-        "kandidaten": len(findings_p1),
-        "dauer_sekunden": dur_p1,
-        "kategorien": dict(p1_cats),
-    }
-
+    findings_p1, dur_p1 = await _run_pass(
+        BreitPass(), "Pass 1: Breite Ersterfassung", "pass1_breit",
+        AnalyseStatus.PASS_1.value, 15,
+    )
     roh_kandidaten_pro_pass["Pass 1: Breite Ersterfassung"] = [
         _raw_finding_to_dict(f) for f in findings_p1
     ]
-
-    await _log(db, aid, vid,
-               f"Pass 1 abgeschlossen: {len(findings_p1)} Kandidaten in {dur_p1}s.",
-               details=auswertung["passes"]["pass1_breit"])
     all_raw_findings.extend(findings_p1)
-    await db.commit()
 
     # Pass 2: Perspektivische Vertiefung
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_2.value, "Perspektivische Vertiefung", 35)
-    await _log(db, aid, vid, "Pass 2: Perspektivische Vertiefung gestartet (5 Perspektiven).")
-    await db.commit()
-
-    t0 = time.monotonic()
-    pass2 = PerspektivePass()
-    findings_p2 = await pass2.run(segments, llm_config, full_text, perspective=perspective)
-    dur_p2 = round(time.monotonic() - t0, 1)
-
-    # Break down pass 2 by perspective
-    p2_by_perspective: dict[str, int] = {}
+    findings_p2, dur_p2 = await _run_pass(
+        PerspektivePass(), "Pass 2: Perspektivische Vertiefung", "pass2_perspektive",
+        AnalyseStatus.PASS_2.value, 35,
+    )
     for f in findings_p2:
-        p2_by_perspective[f.quelle_pass] = p2_by_perspective.get(f.quelle_pass, 0) + 1
-
-    p2_cats = Counter(f.kategorie for f in findings_p2)
-    auswertung["passes"]["pass2_perspektive"] = {
-        "kandidaten": len(findings_p2),
-        "dauer_sekunden": dur_p2,
-        "pro_perspektive": p2_by_perspective,
-        "kategorien": dict(p2_cats),
-    }
-
-    # Store pass 2 findings grouped by perspective sub-pass
-    for f in findings_p2:
-        pass_key = f.quelle_pass or "Pass 2: Unbekannt"
-        roh_kandidaten_pro_pass.setdefault(pass_key, []).append(
+        pass_key_2 = f.quelle_pass or "Pass 2: Unbekannt"
+        roh_kandidaten_pro_pass.setdefault(pass_key_2, []).append(
             _raw_finding_to_dict(f)
         )
-
-    await _log(db, aid, vid,
-               f"Pass 2 abgeschlossen: {len(findings_p2)} Kandidaten in {dur_p2}s.",
-               details=auswertung["passes"]["pass2_perspektive"])
     all_raw_findings.extend(findings_p2)
-    await db.commit()
 
     # Pass 3: Implizite Pflichten
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_3.value, "Implizite Pflichten", 60)
-    await _log(db, aid, vid, "Pass 3: Implizite Pflichten gestartet.")
-    await db.commit()
-
-    t0 = time.monotonic()
-    pass3 = ImplizitPass()
-    findings_p3 = await pass3.run(segments, llm_config, full_text, perspective=perspective)
-    dur_p3 = round(time.monotonic() - t0, 1)
-
-    p3_cats = Counter(f.kategorie for f in findings_p3)
-    auswertung["passes"]["pass3_implizit"] = {
-        "kandidaten": len(findings_p3),
-        "dauer_sekunden": dur_p3,
-        "kategorien": dict(p3_cats),
-    }
-
+    findings_p3, dur_p3 = await _run_pass(
+        ImplizitPass(), "Pass 3: Implizite Pflichten", "pass3_implizit",
+        AnalyseStatus.PASS_3.value, 60,
+    )
     roh_kandidaten_pro_pass["Pass 3: Implizite Pflichten"] = [
         _raw_finding_to_dict(f) for f in findings_p3
     ]
-
-    await _log(db, aid, vid,
-               f"Pass 3 abgeschlossen: {len(findings_p3)} Kandidaten in {dur_p3}s.",
-               details=auswertung["passes"]["pass3_implizit"])
     all_raw_findings.extend(findings_p3)
-    await db.commit()
 
     # Pass 4: Bankregulatorik
-    await _update_analyse(db, analyse, AnalyseStatus.PASS_4.value, "Bankregulatorik", 75)
-    await _log(db, aid, vid, "Pass 4: Bankregulatorik gestartet (KWG, MaRisk, BAIT, DORA).")
-    await db.commit()
-
-    t0 = time.monotonic()
-    pass4 = BankregulatorikPass()
-    findings_p4 = await pass4.run(segments, llm_config, full_text, perspective=perspective)
-    dur_p4 = round(time.monotonic() - t0, 1)
-
-    p4_cats = Counter(f.kategorie for f in findings_p4)
-    auswertung["passes"]["pass4_bankregulatorik"] = {
-        "kandidaten": len(findings_p4),
-        "dauer_sekunden": dur_p4,
-        "kategorien": dict(p4_cats),
-    }
-
+    findings_p4, dur_p4 = await _run_pass(
+        BankregulatorikPass(), "Pass 4: Bankregulatorik", "pass4_bankregulatorik",
+        AnalyseStatus.PASS_4.value, 75,
+    )
     roh_kandidaten_pro_pass["Pass 4: Bankregulatorik"] = [
         _raw_finding_to_dict(f) for f in findings_p4
     ]
-
-    await _log(db, aid, vid,
-               f"Pass 4 abgeschlossen: {len(findings_p4)} Kandidaten in {dur_p4}s.",
-               details=auswertung["passes"]["pass4_bankregulatorik"])
     all_raw_findings.extend(findings_p4)
-    await db.commit()
+
+    # If ALL passes failed and we have zero findings, abort
+    if not all_raw_findings:
+        if pass_errors:
+            raise RuntimeError(
+                f"Alle {len(pass_errors)} Analyse-Passes fehlgeschlagen. "
+                f"Keine Ergebnisse verfügbar."
+            )
 
     # --- Step 4a: Early semantic deduplication ---
     t0 = time.monotonic()
@@ -330,9 +347,18 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                f"Topic Clustering gestartet: {len(all_raw_findings)} Findings clustern.")
     await db.commit()
 
+    topic_clusters = None
     t0 = time.monotonic()
-    topic_clusters = await clustere_findings(all_raw_findings, llm_config)
-    dur_cluster = round(time.monotonic() - t0, 1)
+    try:
+        topic_clusters = await clustere_findings(all_raw_findings, llm_config)
+        dur_cluster = round(time.monotonic() - t0, 1)
+    except Exception as e:
+        dur_cluster = round(time.monotonic() - t0, 1)
+        logger.error(f"Topic Clustering fehlgeschlagen: {e}", exc_info=True)
+        pass_errors.append({"pass": "Clustering", "error_type": type(e).__name__, "message": str(e)})
+        await _log(db, aid, vid,
+                   f"Topic Clustering fehlgeschlagen: {type(e).__name__}. Pipeline fährt fort.",
+                   ebene=ProtokollEbene.WARNUNG.value)
 
     if topic_clusters:
         auswertung["clustering"] = {
@@ -349,7 +375,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     else:
         auswertung["clustering"] = {"status": "uebersprungen", "dauer_sekunden": dur_cluster}
         await _log(db, aid, vid,
-                   "Topic Clustering übersprungen (LLM-Ergebnis ungültig).",
+                   "Topic Clustering übersprungen (LLM-Ergebnis ungültig oder fehlgeschlagen).",
                    ebene=ProtokollEbene.WARNUNG.value)
     await db.commit()
 
@@ -628,11 +654,19 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             }
             editorial_input.append(thema_data)
 
-        editorial_result = await final_editorial_pass(
-            themen_daten=editorial_input,
-            text_laenge=len(full_text),
-            config=llm_config,
-        )
+        editorial_result = None
+        try:
+            editorial_result = await final_editorial_pass(
+                themen_daten=editorial_input,
+                text_laenge=len(full_text),
+                config=llm_config,
+            )
+        except Exception as e:
+            logger.error(f"Final Editorial Pass fehlgeschlagen: {e}", exc_info=True)
+            pass_errors.append({"pass": "Editorial", "error_type": type(e).__name__, "message": str(e)})
+            await _log(db, aid, vid,
+                       f"Final Editorial Pass fehlgeschlagen: {type(e).__name__}. Themen bleiben ohne Editorial.",
+                       ebene=ProtokollEbene.WARNUNG.value)
         dur_editorial = round(time.monotonic() - t0, 1)
 
         if editorial_result:
@@ -768,8 +802,26 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     total_duration = round(time.monotonic() - pipeline_start, 1)
     auswertung["zeiten"]["gesamt_sekunden"] = total_duration
 
+    # Record pass errors in auswertung for debug
+    if pass_errors:
+        auswertung["pass_errors"] = pass_errors
+
+    # Record LLM throttle stats
+    from app.discovery.llm_client import get_throttle
+    throttle_stats = get_throttle(llm_config).stats
+    auswertung["llm_stats"] = throttle_stats
+
     analyse.auswertung = auswertung
-    analyse.status = AnalyseStatus.ABGESCHLOSSEN.value
+    # Determine final status: partial if some passes failed but we have results
+    if pass_errors and all_raw_findings:
+        analyse.status = AnalyseStatus.TEILWEISE_ABGESCHLOSSEN.value
+        analyse.fehler = (
+            f"{len(pass_errors)} Analyse-Schritt(e) fehlgeschlagen. "
+            f"Ergebnisse basieren auf den erfolgreichen Schritten."
+        )
+        analyse.fehler_details = {"pass_errors": pass_errors}
+    else:
+        analyse.status = AnalyseStatus.ABGESCHLOSSEN.value
     analyse.aktueller_pass = None
     analyse.fortschritt = 100
     analyse.beendet_am = datetime.utcnow()
