@@ -1,4 +1,4 @@
-"""LLM client for security assessment with retry and fallback."""
+"""LLM client for security assessment with retry, fallback, and input sanitization."""
 
 from __future__ import annotations
 
@@ -18,9 +18,37 @@ PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "assessment.tx
 VALID_CLASSIFICATIONS = {"phishing", "advertising", "legitimate", "suspicious", "unknown"}
 VALID_ACTIONS = {"delete", "open_ticket", "verify_via_known_channel", "allow", "manual_review"}
 
+# Maximum characters of body text sent to the LLM
+BODY_EXCERPT_MAX = 1500
+
 
 def _load_prompt_template() -> str:
     return PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+def _sanitize_body_text(raw: str) -> str:
+    """Strip HTML noise and limit size for safe LLM consumption.
+
+    Prefer clean plain text. Strip script/style/comment blocks,
+    collapse whitespace, and truncate.
+    """
+    if not raw:
+        return ""
+    text = raw
+    # Remove HTML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    # Remove <script> blocks
+    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove <style> blocks
+    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Strip remaining HTML tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Decode common HTML entities
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    # Truncate
+    return text[:BODY_EXCERPT_MAX]
 
 
 def build_analysis_payload(
@@ -36,7 +64,12 @@ def build_analysis_payload(
     attachment_metadata: list[dict],
     pre_scores: dict | None = None,
 ) -> dict:
-    """Build the structured payload sent to the LLM."""
+    """Build the structured payload sent to the LLM.
+
+    Body text is sanitized and wrapped in an explicit untrusted delimiter.
+    """
+    cleaned_body = _sanitize_body_text(body_text_snippet)
+
     payload = {
         "email_metadata": {
             "from": sender,
@@ -46,7 +79,10 @@ def build_analysis_payload(
             "date": date,
             "authentication_results": authentication_results,
         },
-        "body_text_snippet": body_text_snippet[:2000] if body_text_snippet else "",
+        "untrusted_email_body_excerpt": (
+            f"<UNTRUSTED_EMAIL_CONTENT>\n{cleaned_body}\n</UNTRUSTED_EMAIL_CONTENT>"
+            if cleaned_body else ""
+        ),
         "header_findings": header_findings,
         "link_analyses": link_analyses,
         "attachment_metadata": attachment_metadata,
@@ -120,7 +156,7 @@ async def _call_llm(messages: list[dict]) -> dict | None:
 async def get_assessment(payload: dict) -> tuple[dict | None, str]:
     """Send analysis payload to LLM with retry on malformed output.
 
-    Returns (assessment_dict, source) where source is "llm" or None if failed.
+    Returns (assessment_dict, source) where source is "llm" or "none" if failed.
     """
     if not settings.openai_api_key:
         logger.error("OpenAI API key not configured")

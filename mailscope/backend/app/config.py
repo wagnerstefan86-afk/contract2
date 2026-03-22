@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     enable_urlscan: bool = True
     enable_llm: bool = True
 
+    # Optional access token for test deployments
+    app_access_token: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

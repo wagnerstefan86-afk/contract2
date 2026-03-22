@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { getJobStatus, getJobResult, getExportUrl, type JobStatus, type JobResult, type ServiceFlags } from "@/lib/api";
+import { getJobStatus, getJobResult, fetchExport, type JobStatus, type JobResult, type ServiceFlags } from "@/lib/api";
 import VerdictCard from "@/components/VerdictCard";
 import HeaderFindings from "@/components/HeaderFindings";
 import LinkTable from "@/components/LinkTable";
@@ -160,17 +160,28 @@ export default function JobPage() {
             E-Mail-Adressen maskieren
           </label>
           {isDone && (
-            <a
-              href={getExportUrl(jobId)}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={async () => {
+                try {
+                  const data = await fetchExport(jobId);
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `mailscope-${jobId}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e: any) {
+                  alert(e.message || "Export fehlgeschlagen");
+                }
+              }}
               className="flex items-center gap-1.5 text-xs font-medium text-accent-blue hover:text-accent-blue/80 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               JSON Export
-            </a>
+            </button>
           )}
         </div>
       </div>

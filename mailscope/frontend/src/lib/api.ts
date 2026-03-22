@@ -1,5 +1,26 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+const TOKEN_STORAGE_KEY = "mailscope_app_token";
+
+export function getStoredToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+}
+
+export function setStoredToken(token: string): void {
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  return token ? { "X-App-Token": token } : {};
+}
+
 export interface ServiceFlags {
   vt_enabled: boolean;
   urlscan_enabled: boolean;
@@ -106,9 +127,11 @@ export async function uploadFile(file: File): Promise<{ job_id: string }> {
   formData.append("file", file);
   const res = await fetch(`${API_BASE}/api/upload`, {
     method: "POST",
+    headers: authHeaders(),
     body: formData,
   });
   if (!res.ok) {
+    if (res.status === 401) throw new Error("Zugangstoken ungültig oder fehlend.");
     const err = await res.json().catch(() => ({ detail: "Upload fehlgeschlagen" }));
     throw new Error(err.detail || "Upload fehlgeschlagen");
   }
@@ -116,17 +139,26 @@ export async function uploadFile(file: File): Promise<{ job_id: string }> {
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatus> {
-  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { headers: authHeaders() });
+  if (res.status === 401) throw new Error("Zugangstoken ungültig oder fehlend.");
   if (!res.ok) throw new Error("Job nicht gefunden");
   return res.json();
 }
 
 export async function getJobResult(jobId: string): Promise<JobResult> {
-  const res = await fetch(`${API_BASE}/api/jobs/${jobId}/result`);
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}/result`, { headers: authHeaders() });
+  if (res.status === 401) throw new Error("Zugangstoken ungültig oder fehlend.");
   if (!res.ok) throw new Error("Ergebnis nicht gefunden");
   return res.json();
 }
 
 export function getExportUrl(jobId: string): string {
   return `${API_BASE}/api/jobs/${jobId}/export`;
+}
+
+export async function fetchExport(jobId: string): Promise<object> {
+  const res = await fetch(getExportUrl(jobId), { headers: authHeaders() });
+  if (res.status === 401) throw new Error("Zugangstoken ungültig oder fehlend.");
+  if (!res.ok) throw new Error("Export fehlgeschlagen");
+  return res.json();
 }

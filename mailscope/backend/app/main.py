@@ -1,9 +1,10 @@
 import json
 import logging
+import secrets
 import tempfile
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="MailScope", version="0.2.0")
+app = FastAPI(title="MailScope", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,6 +41,14 @@ app.add_middleware(
 )
 
 MAX_BYTES = settings.max_upload_size_mb * 1024 * 1024
+
+
+def _verify_token(x_app_token: str | None = Header(default=None)):
+    """Check APP_ACCESS_TOKEN if configured. Skip if not set."""
+    if not settings.app_access_token:
+        return
+    if not x_app_token or not secrets.compare_digest(x_app_token, settings.app_access_token):
+        raise HTTPException(401, "Ungültiger oder fehlender Zugangstoken (X-App-Token)")
 
 
 def _service_flags() -> ServiceFlags:
@@ -133,7 +142,7 @@ def health():
     return HealthResponse(services=_service_flags())
 
 
-@app.post("/api/upload", response_model=JobCreated)
+@app.post("/api/upload", response_model=JobCreated, dependencies=[Depends(_verify_token)])
 async def upload_email(
     file: UploadFile,
     background_tasks: BackgroundTasks,
@@ -163,7 +172,7 @@ async def upload_email(
     return JobCreated(job_id=job.id)
 
 
-@app.get("/api/jobs/{job_id}", response_model=JobStatus)
+@app.get("/api/jobs/{job_id}", response_model=JobStatus, dependencies=[Depends(_verify_token)])
 def get_job_status(job_id: str, db: Session = Depends(get_db)):
     job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
     if not job:
@@ -188,7 +197,7 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/api/jobs/{job_id}/result", response_model=JobResult)
+@app.get("/api/jobs/{job_id}/result", response_model=JobResult, dependencies=[Depends(_verify_token)])
 def get_job_result(job_id: str, db: Session = Depends(get_db)):
     job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
     if not job:
@@ -222,7 +231,7 @@ def get_job_result(job_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/api/jobs/{job_id}/export", response_model=ExportResult)
+@app.get("/api/jobs/{job_id}/export", response_model=ExportResult, dependencies=[Depends(_verify_token)])
 def export_job(job_id: str, db: Session = Depends(get_db)):
     """Export full structured analysis as JSON."""
     job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()

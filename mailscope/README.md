@@ -28,22 +28,28 @@ Open http://localhost:3000 and drag-and-drop a `.eml` or `.msg` file.
 ## API Endpoints
 
 ```bash
-# Health check (shows which services are enabled)
+# Health check (no token required)
 curl http://localhost:8000/api/health
 
 # Upload email
 curl -X POST http://localhost:8000/api/upload \
+  -H "X-App-Token: my-secret-test-token" \
   -F "file=@test-email.eml"
 
 # Check job status
-curl http://localhost:8000/api/jobs/{job_id}
+curl http://localhost:8000/api/jobs/{job_id} \
+  -H "X-App-Token: my-secret-test-token"
 
 # Get full result
-curl http://localhost:8000/api/jobs/{job_id}/result
+curl http://localhost:8000/api/jobs/{job_id}/result \
+  -H "X-App-Token: my-secret-test-token"
 
 # Export structured JSON
-curl http://localhost:8000/api/jobs/{job_id}/export
+curl http://localhost:8000/api/jobs/{job_id}/export \
+  -H "X-App-Token: my-secret-test-token"
 ```
+
+> **Note:** The `X-App-Token` header is only required if `APP_ACCESS_TOKEN` is set in the environment. If unset, the API is open.
 
 ## Architecture
 
@@ -104,6 +110,7 @@ mailscope/
 | `ENABLE_VIRUSTOTAL` | Enable VirusTotal checks | `true` |
 | `ENABLE_URLSCAN` | Enable urlscan.io checks | `true` |
 | `ENABLE_LLM` | Enable LLM assessment | `true` |
+| `APP_ACCESS_TOKEN` | Optional access token for test deployments | (unset = open) |
 | `MAX_POLL_SECONDS` | Max wait for external scans | `120` |
 | `POLL_INTERVAL_SECONDS` | Polling interval | `5` |
 | `MAX_UPLOAD_SIZE_MB` | Max upload file size | `25` |
@@ -112,12 +119,25 @@ mailscope/
 
 - **Only extracted URLs** are submitted to VirusTotal and urlscan.io
 - The email itself and attachments are **never** uploaded to external services
+- Email body sent to the LLM is sanitized (HTML/script stripped), limited to 1500 chars, and wrapped in an `<UNTRUSTED_EMAIL_CONTENT>` delimiter with explicit prompt instructions to treat it as evidence only
 - urlscan visibility defaults to `private`
 - External services can be disabled entirely via env flags
 - Email masking toggle in the UI
 - Secrets via environment variables only
 - No raw email bodies logged at INFO level
 - Sensitive internal emails should not be analyzed without prior approval
+- Job IDs are random UUIDs; there is no endpoint to list all jobs
+
+### Access protection for test deployments
+
+Set `APP_ACCESS_TOKEN` in `.env` to require an `X-App-Token` header on all API calls (except `/api/health`). The frontend provides a token input field (stored in localStorage).
+
+```bash
+# .env
+APP_ACCESS_TOKEN=my-secret-test-token
+```
+
+> **This is NOT production-grade authentication.** It is a simple shared-secret gate for internal test deployments. For production use, add proper user authentication (OAuth, SSO, etc.).
 
 ## Testing Modes
 
@@ -156,7 +176,7 @@ Leave `VIRUSTOTAL_API_KEY` and `URLSCAN_API_KEY` empty. Even with `ENABLE_VIRUST
 |---|---|---|
 | VirusTotal | Extracted URLs only | Public API |
 | urlscan.io | Extracted URLs only | Configurable (default: private) |
-| OpenAI | Structured findings, header analysis, text snippet (max 2000 chars) | Per API terms |
+| OpenAI | Structured findings, header analysis, sanitized text excerpt (max 1500 chars) | Per API terms |
 
 No email body HTML, no attachments, no raw headers are sent to external services.
 
@@ -186,7 +206,7 @@ If the LLM fails or is disabled, a deterministic fallback assessment is generate
 - Background tasks use FastAPI BackgroundTasks (in-process); a task queue would be more robust
 - VT/urlscan rate limits may apply depending on API tier
 - `.msg` parsing via python-oxmsg may not cover all proprietary fields (e.g. some custom Exchange headers, embedded OLE objects, or non-standard attachment encoding)
-- No user authentication
+- No production-grade user authentication (APP_ACCESS_TOKEN is a simple test gate only)
 - LLM retry is limited to one repair attempt before fallback
 
 ## Suggested Improvements

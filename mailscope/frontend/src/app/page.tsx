@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { uploadFile } from "@/lib/api";
+import { uploadFile, getStoredToken, setStoredToken } from "@/lib/api";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -10,6 +10,17 @@ export default function UploadPage() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+
+  useEffect(() => {
+    setToken(getStoredToken());
+  }, []);
+
+  const handleTokenChange = useCallback((val: string) => {
+    setToken(val);
+    setStoredToken(val);
+  }, []);
 
   const handleFile = useCallback((f: File) => {
     const ext = f.name.split(".").pop()?.toLowerCase();
@@ -127,6 +138,32 @@ export default function UploadPage() {
           </div>
         )}
       </div>
+
+      {/* Access token (optional, for test deployments) */}
+      <details className="mt-4">
+        <summary className="text-xs text-slate-600 cursor-pointer hover:text-slate-400">
+          Zugangstoken (nur für geschützte Instanzen)
+        </summary>
+        <div className="mt-2 flex items-center gap-2">
+          <input
+            type={showToken ? "text" : "password"}
+            value={token}
+            onChange={(e) => handleTokenChange(e.target.value)}
+            placeholder="APP_ACCESS_TOKEN"
+            className="flex-1 rounded-lg bg-surface-card border border-white/10 px-3 py-2 text-xs text-slate-300 placeholder-slate-600 focus:border-accent-blue/50 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => setShowToken(!showToken)}
+            className="text-xs text-slate-500 hover:text-slate-300 px-2 py-2"
+          >
+            {showToken ? "Verbergen" : "Anzeigen"}
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-600 mt-1">
+          Nur nötig, wenn der Server mit APP_ACCESS_TOKEN geschützt ist. Token wird im Browser gespeichert.
+        </p>
+      </details>
 
       {error && (
         <div className="mt-4 rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-2.5">
