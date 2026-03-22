@@ -37,7 +37,7 @@ class LLMConfig:
     base_url: str | None = None
     # Rate limiting configuration
     max_rpm: int = 60          # max requests per minute
-    max_concurrent: int = 5     # max concurrent requests
+    max_concurrent: int = 3     # max concurrent requests
     max_retries: int = 4        # max retries on 429/5xx
 
 
@@ -46,14 +46,16 @@ class LLMConfig:
 # ---------------------------------------------------------------------------
 
 class LLMThrottle:
-    """Simple token-aware throttle for LLM requests.
+    """Global concurrency limiter and rate pacer for all LLM requests.
 
-    Limits concurrent requests and enforces a minimum delay between requests
-    to stay within RPM limits.
+    Shared across the entire application. Limits concurrent requests via
+    asyncio.Semaphore and enforces a minimum delay between requests to
+    prevent burst traffic.
     """
 
-    def __init__(self, max_concurrent: int = 5, min_interval: float = 1.0):
+    def __init__(self, max_concurrent: int = 3, min_interval: float = 0.3):
         self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
         self._min_interval = min_interval
         self._last_request: float = 0.0
         self._lock = asyncio.Lock()
@@ -62,18 +64,31 @@ class LLMThrottle:
         self._total_retries: int = 0
         self._rate_limit_hits: int = 0
         self._server_errors: int = 0
+        # Queue/pacing metrics
+        self._total_queue_wait: float = 0.0
+        self._total_pacing_delay: float = 0.0
+        self._max_queue_wait: float = 0.0
 
     async def acquire(self, token_estimate: int = 0):
-        """Acquire a slot, waiting if necessary."""
+        """Acquire a slot, waiting if necessary. Tracks wait times."""
+        t0 = time.monotonic()
         await self._semaphore.acquire()
+        queue_wait = time.monotonic() - t0
+
         async with self._lock:
             now = time.monotonic()
+            pacing_delay = 0.0
             wait = self._min_interval - (now - self._last_request)
             if wait > 0:
                 await asyncio.sleep(wait)
+                pacing_delay = wait
             self._last_request = time.monotonic()
             self._total_requests += 1
             self._total_tokens_est += token_estimate
+            self._total_queue_wait += queue_wait
+            self._total_pacing_delay += pacing_delay
+            if queue_wait > self._max_queue_wait:
+                self._max_queue_wait = queue_wait
 
     def record_retry(self, is_rate_limit: bool = False):
         """Record a retry attempt for metrics."""
@@ -88,12 +103,22 @@ class LLMThrottle:
 
     @property
     def stats(self) -> dict:
+        avg_queue = (
+            self._total_queue_wait / self._total_requests
+            if self._total_requests > 0 else 0.0
+        )
         return {
             "total_requests": self._total_requests,
             "total_tokens_estimated": self._total_tokens_est,
             "total_retries": self._total_retries,
             "rate_limit_hits": self._rate_limit_hits,
             "server_errors": self._server_errors,
+            "max_concurrent": self._max_concurrent,
+            "min_interval_s": self._min_interval,
+            "total_queue_wait_s": round(self._total_queue_wait, 3),
+            "max_queue_wait_s": round(self._max_queue_wait, 3),
+            "avg_queue_wait_s": round(avg_queue, 3),
+            "total_pacing_delay_s": round(self._total_pacing_delay, 3),
         }
 
 
@@ -101,14 +126,24 @@ class LLMThrottle:
 _throttle: LLMThrottle | None = None
 
 
-def get_throttle(config: LLMConfig) -> LLMThrottle:
-    """Get or create the global throttle instance."""
+def get_throttle(config: LLMConfig | None = None) -> LLMThrottle:
+    """Get or create the global throttle instance.
+
+    Concurrency and pacing are controlled via environment variables:
+      LLM_MAX_CONCURRENCY  – max parallel LLM requests (default 3)
+      LLM_MIN_INTERVAL     – minimum seconds between requests (default 0.3)
+    """
     global _throttle
     if _throttle is None:
-        min_interval = 60.0 / max(config.max_rpm, 1)
+        max_conc = int(os.getenv("LLM_MAX_CONCURRENCY", "3"))
+        min_int = float(os.getenv("LLM_MIN_INTERVAL", "0.3"))
         _throttle = LLMThrottle(
-            max_concurrent=config.max_concurrent,
-            min_interval=min_interval,
+            max_concurrent=max_conc,
+            min_interval=min_int,
+        )
+        logger.info(
+            f"LLM-Throttle initialisiert: max_concurrent={max_conc}, "
+            f"min_interval={min_int}s"
         )
     return _throttle
 
