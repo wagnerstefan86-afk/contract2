@@ -2,28 +2,33 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { getJobStatus, getJobResult, type JobStatus, type JobResult } from "@/lib/api";
+import { getJobStatus, getJobResult, getExportUrl, type JobStatus, type JobResult, type ServiceFlags } from "@/lib/api";
 import VerdictCard from "@/components/VerdictCard";
 import HeaderFindings from "@/components/HeaderFindings";
 import LinkTable from "@/components/LinkTable";
 import Accordion from "@/components/Accordion";
 import SenderInfo from "@/components/SenderInfo";
+import PreScoreBar from "@/components/PreScoreBar";
+import ServiceBadges from "@/components/ServiceBadges";
 
 const STAGE_LABELS: Record<string, string> = {
-  pending: "Warte auf Verarbeitung",
+  queued: "In Warteschlange",
   parsing: "E-Mail wird geparst",
-  extracting: "Links werden extrahiert",
-  scanning: "URLs werden geprüft (VT/urlscan)",
-  analyzing: "KI-Bewertung läuft",
-  done: "Analyse abgeschlossen",
-  error: "Fehler aufgetreten",
+  extracting_links: "Links werden extrahiert",
+  checking_reputation: "URLs werden geprüft (VT/urlscan)",
+  llm_assessment: "KI-Bewertung läuft",
+  completed: "Analyse abgeschlossen",
+  completed_with_warnings: "Analyse abgeschlossen (mit Hinweisen)",
+  failed: "Fehler aufgetreten",
 };
 
-const STAGE_ORDER = ["pending", "parsing", "extracting", "scanning", "analyzing", "done"];
+const STAGE_ORDER = ["queued", "parsing", "extracting_links", "checking_reputation", "llm_assessment", "completed"];
+const TERMINAL_STATUSES = new Set(["completed", "completed_with_warnings", "failed"]);
 
 function StatusProgress({ status }: { status: string }) {
-  const currentIdx = STAGE_ORDER.indexOf(status);
-  const isError = status === "error";
+  const displayStatus = status === "completed_with_warnings" ? "completed" : status;
+  const currentIdx = STAGE_ORDER.indexOf(displayStatus);
+  const isError = status === "failed";
 
   return (
     <div className="space-y-3">
@@ -92,10 +97,10 @@ export default function JobPage() {
         if (cancelled) return;
         setStatus(s);
 
-        if (s.status === "done" || s.status === "error") {
+        if (TERMINAL_STATUSES.has(s.status)) {
           const r = await getJobResult(jobId);
           if (!cancelled) setResult(r);
-          return; // Stop polling
+          return;
         }
 
         timeoutId = setTimeout(poll, 2000);
@@ -133,28 +138,63 @@ export default function JobPage() {
     );
   }
 
-  const isDone = status.status === "done" && result;
+  const isDone = TERMINAL_STATUSES.has(status.status) && result;
+  const warnings = result?.warnings || status.warnings || [];
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h2 className="text-xl font-bold">{status.filename}</h2>
           {status.subject && <p className="text-sm text-slate-400 mt-1">{status.subject}</p>}
         </div>
-        <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={maskEmails}
-            onChange={(e) => setMaskEmails(e.target.checked)}
-            className="rounded border-slate-600 bg-surface-card"
-          />
-          E-Mail-Adressen maskieren
-        </label>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={maskEmails}
+              onChange={(e) => setMaskEmails(e.target.checked)}
+              className="rounded border-slate-600 bg-surface-card"
+            />
+            E-Mail-Adressen maskieren
+          </label>
+          {isDone && (
+            <a
+              href={getExportUrl(jobId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs font-medium text-accent-blue hover:text-accent-blue/80 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              JSON Export
+            </a>
+          )}
+        </div>
       </div>
 
-      {/* Progress or Error */}
+      {/* Service badges */}
+      {(status.services || result?.services) && (
+        <ServiceBadges services={result?.services || status.services} />
+      )}
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+          <p className="text-xs font-medium text-amber-400 mb-1">Hinweise</p>
+          <ul className="space-y-0.5">
+            {warnings.map((w, i) => (
+              <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
+                <span className="text-amber-500 mt-0.5">•</span>{w}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Progress */}
       {!isDone && (
         <div className="rounded-xl border border-white/10 bg-surface-card p-6">
           <h3 className="text-sm font-semibold mb-4 text-slate-300">Analyse-Fortschritt</h3>
@@ -172,6 +212,9 @@ export default function JobPage() {
         <>
           {/* Verdict */}
           {result.assessment && <VerdictCard assessment={result.assessment} />}
+
+          {/* Pre-scores */}
+          {result.pre_scores && <PreScoreBar scores={result.pre_scores} />}
 
           {/* Sender info */}
           <SenderInfo

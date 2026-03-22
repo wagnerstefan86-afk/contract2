@@ -58,11 +58,13 @@ export default function UploadPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
           </svg>
           <div>
-            <p className="text-sm font-medium text-amber-400">Datenschutzhinweis</p>
-            <p className="text-xs text-slate-400 mt-1">
-              Extrahierte URLs werden zur Reputationsprüfung an externe Dienste (VirusTotal, urlscan.io) übermittelt.
-              Die E-Mail selbst wird nicht an Dritte weitergeleitet.
-            </p>
+            <p className="text-sm font-medium text-amber-400">Datenschutz- und Sicherheitshinweis</p>
+            <ul className="text-xs text-slate-400 mt-1 space-y-1 list-disc list-inside">
+              <li>Extrahierte URLs werden (sofern aktiviert) an externe Reputationsdienste (VirusTotal, urlscan.io) übermittelt.</li>
+              <li>Die E-Mail selbst und Anhänge werden <strong className="text-slate-300">nicht</strong> an Dritte weitergeleitet.</li>
+              <li>Die Nutzung externer Dienste ist optional und kann serverseitig deaktiviert werden.</li>
+              <li>Sensible interne E-Mails sollten nur nach vorheriger Abstimmung analysiert werden.</li>
+            </ul>
           </div>
         </div>
       </div>

@@ -41,7 +41,15 @@ class HeaderFinding(BaseModel):
     detail: str
 
 
+class PreScores(BaseModel):
+    phishing_score: int = 0
+    advertising_score: int = 0
+    legitimacy_score: int = 0
+    breakdown: dict[str, float] = {}
+
+
 class AssessmentResult(BaseModel):
+    source: str = "llm"  # llm | deterministic | fallback
     classification: str | None = None
     risk_score: int | None = None
     confidence: int | None = None
@@ -51,11 +59,18 @@ class AssessmentResult(BaseModel):
     analyst_summary: str | None = None
 
 
+class ServiceFlags(BaseModel):
+    vt_enabled: bool = True
+    urlscan_enabled: bool = True
+    llm_enabled: bool = True
+
+
 class JobStatus(BaseModel):
     id: str
     filename: str
     status: str
     error_message: str | None = None
+    warnings: list[str] = []
     subject: str | None = None
     sender: str | None = None
     reply_to: str | None = None
@@ -64,6 +79,7 @@ class JobStatus(BaseModel):
     date: str | None = None
     message_id: str | None = None
     link_count: int = 0
+    services: ServiceFlags = ServiceFlags()
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -73,6 +89,7 @@ class JobResult(BaseModel):
     filename: str
     status: str
     error_message: str | None = None
+    warnings: list[str] = []
     subject: str | None = None
     sender: str | None = None
     reply_to: str | None = None
@@ -87,11 +104,29 @@ class JobResult(BaseModel):
     body_text: str | None = None
     attachment_metadata: list[dict[str, Any]] = []
     header_findings: list[HeaderFinding] = []
+    pre_scores: PreScores | None = None
     links: list[LinkDetail] = []
     assessment: AssessmentResult | None = None
+    services: ServiceFlags = ServiceFlags()
     created_at: datetime | None = None
+
+
+class ExportResult(BaseModel):
+    """Full structured export of an analysis."""
+    job_id: str
+    filename: str
+    status: str
+    warnings: list[str] = []
+    email_metadata: dict[str, Any] = {}
+    header_findings: list[HeaderFinding] = []
+    pre_scores: PreScores | None = None
+    links: list[LinkDetail] = []
+    assessment: AssessmentResult | None = None
+    services: ServiceFlags = ServiceFlags()
+    analyzed_at: datetime | None = None
 
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
+    services: ServiceFlags = ServiceFlags()

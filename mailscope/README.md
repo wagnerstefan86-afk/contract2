@@ -1,6 +1,6 @@
 # MailScope – E-Mail-Sicherheitsanalyse
 
-A Docker-based web application that lets employees upload `.eml` or `.msg` email files for automated security analysis. Extracts headers, links, checks URLs against VirusTotal and urlscan.io, and produces an LLM-powered security assessment.
+A Docker-based web application that lets employees upload `.eml` or `.msg` email files for automated security analysis. Extracts headers, links, checks URLs against VirusTotal and urlscan.io, computes deterministic pre-scores, and produces an LLM-powered security assessment.
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ Open http://localhost:3000 and drag-and-drop a `.eml` or `.msg` file.
 ## API Endpoints
 
 ```bash
-# Health check
+# Health check (shows which services are enabled)
 curl http://localhost:8000/api/health
 
 # Upload email
@@ -40,6 +40,9 @@ curl http://localhost:8000/api/jobs/{job_id}
 
 # Get full result
 curl http://localhost:8000/api/jobs/{job_id}/result
+
+# Export structured JSON
+curl http://localhost:8000/api/jobs/{job_id}/export
 ```
 
 ## Architecture
@@ -48,37 +51,40 @@ curl http://localhost:8000/api/jobs/{job_id}/result
 mailscope/
 ├── backend/          # FastAPI + Python 3.12
 │   ├── app/
-│   │   ├── main.py           # API endpoints
-│   │   ├── config.py         # Settings from env
-│   │   ├── database.py       # SQLAlchemy + SQLite
-│   │   ├── models.py         # DB models
-│   │   ├── schemas.py        # Pydantic schemas
+│   │   ├── main.py              # API endpoints (upload, status, result, export)
+│   │   ├── config.py            # Settings + service toggles from env
+│   │   ├── database.py          # SQLAlchemy + SQLite
+│   │   ├── models.py            # DB models (job, links, checks, assessment)
+│   │   ├── schemas.py           # Pydantic schemas (incl. pre-scores, export)
 │   │   ├── prompts/
-│   │   │   └── assessment.txt  # LLM prompt template
+│   │   │   └── assessment.txt   # German LLM prompt with guardrails
 │   │   └── services/
-│   │       ├── parser.py         # .eml/.msg parsing
-│   │       ├── link_extractor.py # URL extraction
-│   │       ├── url_normalizer.py # SafeLinks, dedup
-│   │       ├── header_analyzer.py # Header heuristics
-│   │       ├── link_analyzer.py   # Link heuristics
-│   │       ├── virustotal.py     # VT client
-│   │       ├── urlscan.py        # urlscan client
-│   │       ├── llm_client.py     # LLM client
-│   │       └── orchestrator.py   # Background pipeline
+│   │       ├── parser.py           # .eml/.msg parsing
+│   │       ├── link_extractor.py   # URL extraction from text + HTML
+│   │       ├── url_normalizer.py   # SafeLinks, Google redirect, dedup
+│   │       ├── header_analyzer.py  # Header heuristics (SPF/DKIM/DMARC etc.)
+│   │       ├── link_analyzer.py    # Link heuristics (TLD, punycode, etc.)
+│   │       ├── pre_scorer.py       # Deterministic pre-scoring + fallback
+│   │       ├── virustotal.py       # VT client
+│   │       ├── urlscan.py          # urlscan client
+│   │       ├── llm_client.py       # LLM client with retry + validation
+│   │       └── orchestrator.py     # Background pipeline with partial failure
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/         # Next.js + TypeScript + Tailwind
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx          # Upload page
-│   │   │   └── jobs/[id]/page.tsx # Status + Results
+│   │   │   ├── page.tsx              # Upload page with privacy notice
+│   │   │   └── jobs/[id]/page.tsx    # Status + Results + Export
 │   │   ├── components/
-│   │   │   ├── VerdictCard.tsx
-│   │   │   ├── HeaderFindings.tsx
-│   │   │   ├── LinkTable.tsx
-│   │   │   ├── SenderInfo.tsx
-│   │   │   └── Accordion.tsx
-│   │   └── lib/api.ts
+│   │   │   ├── VerdictCard.tsx       # Classification + risk + action
+│   │   │   ├── PreScoreBar.tsx       # Deterministic pre-scores
+│   │   │   ├── ServiceBadges.tsx     # VT/urlscan/LLM status
+│   │   │   ├── HeaderFindings.tsx    # Header analysis findings
+│   │   │   ├── LinkTable.tsx         # Per-link flags + check results
+│   │   │   ├── SenderInfo.tsx        # Sender metadata
+│   │   │   └── Accordion.tsx         # Expandable sections
+│   │   └── lib/api.ts               # Typed API client
 │   ├── Dockerfile
 │   └── package.json
 ├── docker-compose.yml
@@ -90,11 +96,14 @@ mailscope/
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI API key | (required) |
+| `OPENAI_API_KEY` | OpenAI API key | (required for LLM) |
 | `LLM_MODEL` | Model name | `gpt-4o` |
 | `VIRUSTOTAL_API_KEY` | VirusTotal API key | (optional) |
 | `URLSCAN_API_KEY` | urlscan.io API key | (optional) |
 | `URLSCAN_VISIBILITY` | urlscan scan visibility | `private` |
+| `ENABLE_VIRUSTOTAL` | Enable VirusTotal checks | `true` |
+| `ENABLE_URLSCAN` | Enable urlscan.io checks | `true` |
+| `ENABLE_LLM` | Enable LLM assessment | `true` |
 | `MAX_POLL_SECONDS` | Max wait for external scans | `120` |
 | `POLL_INTERVAL_SECONDS` | Polling interval | `5` |
 | `MAX_UPLOAD_SIZE_MB` | Max upload file size | `25` |
@@ -102,19 +111,83 @@ mailscope/
 ## Security & Privacy
 
 - **Only extracted URLs** are submitted to VirusTotal and urlscan.io
-- The email itself is never uploaded to external services
+- The email itself and attachments are **never** uploaded to external services
 - urlscan visibility defaults to `private`
+- External services can be disabled entirely via env flags
 - Email masking toggle in the UI
 - Secrets via environment variables only
 - No raw email bodies logged at INFO level
+- Sensitive internal emails should not be analyzed without prior approval
+
+## Testing Modes
+
+### Offline mode (no external services)
+
+```bash
+# Set in .env:
+ENABLE_VIRUSTOTAL=false
+ENABLE_URLSCAN=false
+ENABLE_LLM=false
+```
+
+The system will still parse the email, extract links, run header/link heuristics, and compute deterministic pre-scores. The assessment will be based on deterministic analysis only.
+
+### Single-service mode
+
+```bash
+# VT only (no urlscan, no LLM):
+ENABLE_VIRUSTOTAL=true
+ENABLE_URLSCAN=false
+ENABLE_LLM=false
+
+# LLM only (no external URL checks):
+ENABLE_VIRUSTOTAL=false
+ENABLE_URLSCAN=false
+ENABLE_LLM=true
+```
+
+### Testing without API keys
+
+Leave `VIRUSTOTAL_API_KEY` and `URLSCAN_API_KEY` empty. Even with `ENABLE_VIRUSTOTAL=true`, missing keys will cause those checks to be skipped with warnings.
+
+### Privacy implications
+
+| Service | What is sent | Visibility |
+|---|---|---|
+| VirusTotal | Extracted URLs only | Public API |
+| urlscan.io | Extracted URLs only | Configurable (default: private) |
+| OpenAI | Structured findings, header analysis, text snippet (max 2000 chars) | Per API terms |
+
+No email body HTML, no attachments, no raw headers are sent to external services.
+
+## Job Lifecycle
+
+Jobs progress through these states:
+1. `queued` → `parsing` → `extracting_links` → `checking_reputation` → `llm_assessment` → `completed`
+2. If scan or LLM issues occur: → `completed_with_warnings`
+3. On fatal error: → `failed`
+
+Partial failures (VT timeout, urlscan error) do **not** fail the entire analysis. The pipeline continues with available evidence and records warnings.
+
+## Deterministic Pre-Scoring
+
+Before the LLM assessment, a weighted pre-score is computed:
+- **Phishing score** (0-100): SPF/DKIM/DMARC failures, domain mismatches, suspicious links, VT/urlscan flags
+- **Advertising score** (0-100): Bulk headers, marketing indicators, tracking links
+- **Legitimacy score** (0-100): Authentication passes
+
+The LLM prompt includes these scores and is instructed to consider (not ignore) them.
+
+If the LLM fails or is disabled, a deterministic fallback assessment is generated from these scores.
 
 ## Known Limitations
 
 - SQLite is used for MVP; not suitable for production concurrency
-- Background tasks use FastAPI BackgroundTasks (in-process); a task queue (Celery/arq) would be more robust
+- Background tasks use FastAPI BackgroundTasks (in-process); a task queue would be more robust
 - VT/urlscan rate limits may apply depending on API tier
-- `.msg` parsing via python-oxmsg may not cover all proprietary fields
+- `.msg` parsing via python-oxmsg may not cover all proprietary fields (e.g. some custom Exchange headers, embedded OLE objects, or non-standard attachment encoding)
 - No user authentication
+- LLM retry is limited to one repair attempt before fallback
 
 ## Suggested Improvements
 
@@ -126,3 +199,5 @@ mailscope/
 6. Add email export / report PDF generation
 7. Webhook notifications when analysis completes
 8. Store uploaded emails encrypted at rest
+9. Add YARA rule scanning for attachments
+10. Add configurable LLM provider (Anthropic, Azure OpenAI)

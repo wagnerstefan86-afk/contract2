@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 25
     log_level: str = "INFO"
 
+    # Service toggles
+    enable_virustotal: bool = True
+    enable_urlscan: bool = True
+    enable_llm: bool = True
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

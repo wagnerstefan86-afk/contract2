@@ -11,13 +11,15 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+# Valid statuses: queued | parsing | extracting_links | checking_reputation | llm_assessment | completed | completed_with_warnings | failed
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
     id = Column(String, primary_key=True, default=_uuid)
     filename = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="pending")  # pending|parsing|extracting|scanning|analyzing|done|error
+    status = Column(String, nullable=False, default="queued")
     error_message = Column(Text, nullable=True)
+    warnings = Column(Text, nullable=True)  # JSON array of warning strings
     subject = Column(String, nullable=True)
     sender = Column(String, nullable=True)
     reply_to = Column(String, nullable=True)
@@ -33,6 +35,18 @@ class AnalysisJob(Base):
     body_html = Column(Text, nullable=True)
     attachment_metadata = Column(Text, nullable=True)  # JSON array
     header_findings = Column(Text, nullable=True)  # JSON array of heuristic findings
+
+    # Deterministic pre-scores
+    phishing_score = Column(Integer, nullable=True)
+    advertising_score = Column(Integer, nullable=True)
+    legitimacy_score = Column(Integer, nullable=True)
+    pre_score_details = Column(Text, nullable=True)  # JSON object with breakdown
+
+    # Service flags (snapshot of what was enabled for this job)
+    vt_enabled = Column(Integer, default=1)
+    urlscan_enabled = Column(Integer, default=1)
+    llm_enabled = Column(Integer, default=1)
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
@@ -69,7 +83,7 @@ class ExternalCheckResult(Base):
     link_id = Column(String, ForeignKey("extracted_links.id"), nullable=False)
     service = Column(String, nullable=False)  # virustotal | urlscan
     submission_id = Column(String, nullable=True)
-    status = Column(String, nullable=False, default="pending")  # pending|polling|done|error|timeout
+    status = Column(String, nullable=False, default="pending")  # pending|polling|done|error|timeout|skipped
     raw_result = Column(Text, nullable=True)  # JSON
     summary = Column(Text, nullable=True)  # JSON summary
     score = Column(Float, nullable=True)
@@ -85,6 +99,7 @@ class LlmAssessment(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     job_id = Column(String, ForeignKey("analysis_jobs.id"), nullable=False)
+    source = Column(String, nullable=False, default="llm")  # llm | deterministic | fallback
     classification = Column(String, nullable=True)
     risk_score = Column(Integer, nullable=True)
     confidence = Column(Integer, nullable=True)

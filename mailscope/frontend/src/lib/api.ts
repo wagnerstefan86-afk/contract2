@@ -1,10 +1,17 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export interface ServiceFlags {
+  vt_enabled: boolean;
+  urlscan_enabled: boolean;
+  llm_enabled: boolean;
+}
+
 export interface JobStatus {
   id: string;
   filename: string;
   status: string;
   error_message: string | null;
+  warnings: string[];
   subject: string | null;
   sender: string | null;
   reply_to: string | null;
@@ -13,6 +20,7 @@ export interface JobStatus {
   date: string | null;
   message_id: string | null;
   link_count: number;
+  services: ServiceFlags;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -48,7 +56,15 @@ export interface HeaderFinding {
   detail: string;
 }
 
+export interface PreScores {
+  phishing_score: number;
+  advertising_score: number;
+  legitimacy_score: number;
+  breakdown: Record<string, number>;
+}
+
 export interface Assessment {
+  source: string;
   classification: string | null;
   risk_score: number | null;
   confidence: number | null;
@@ -63,6 +79,7 @@ export interface JobResult {
   filename: string;
   status: string;
   error_message: string | null;
+  warnings: string[];
   subject: string | null;
   sender: string | null;
   reply_to: string | null;
@@ -77,8 +94,10 @@ export interface JobResult {
   body_text: string | null;
   attachment_metadata: Array<{ filename: string; content_type: string; size: number }>;
   header_findings: HeaderFinding[];
+  pre_scores: PreScores | null;
   links: LinkDetail[];
   assessment: Assessment | null;
+  services: ServiceFlags;
   created_at: string | null;
 }
 
@@ -106,4 +125,8 @@ export async function getJobResult(jobId: string): Promise<JobResult> {
   const res = await fetch(`${API_BASE}/api/jobs/${jobId}/result`);
   if (!res.ok) throw new Error("Ergebnis nicht gefunden");
   return res.json();
+}
+
+export function getExportUrl(jobId: string): string {
+  return `${API_BASE}/api/jobs/${jobId}/export`;
 }

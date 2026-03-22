@@ -12,6 +12,7 @@ from app.database import Base, engine, get_db
 from app.models import AnalysisJob, ExtractedLink, ExternalCheckResult, LlmAssessment
 from app.schemas import (
     AssessmentResult,
+    ExportResult,
     HealthResponse,
     HeaderFinding,
     JobCreated,
@@ -19,6 +20,8 @@ from app.schemas import (
     JobStatus,
     LinkCheckSummary,
     LinkDetail,
+    PreScores,
+    ServiceFlags,
 )
 from app.services.orchestrator import run_analysis
 
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="MailScope", version="0.1.0")
+app = FastAPI(title="MailScope", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,71 +42,23 @@ app.add_middleware(
 MAX_BYTES = settings.max_upload_size_mb * 1024 * 1024
 
 
-@app.get("/api/health", response_model=HealthResponse)
-def health():
-    return HealthResponse()
-
-
-@app.post("/api/upload", response_model=JobCreated)
-async def upload_email(
-    file: UploadFile,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    if not file.filename:
-        raise HTTPException(400, "No filename provided")
-    ext = Path(file.filename).suffix.lower()
-    if ext not in (".eml", ".msg"):
-        raise HTTPException(400, "Only .eml and .msg files are supported")
-
-    content = await file.read()
-    if len(content) > MAX_BYTES:
-        raise HTTPException(413, f"File exceeds {settings.max_upload_size_mb} MB limit")
-
-    job = AnalysisJob(filename=file.filename, status="pending")
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    # Save file to temp location for background processing
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-    tmp.write(content)
-    tmp.close()
-
-    background_tasks.add_task(run_analysis, job.id, tmp.name, ext)
-    logger.info("Created analysis job %s for %s", job.id, file.filename)
-    return JobCreated(job_id=job.id)
-
-
-@app.get("/api/jobs/{job_id}", response_model=JobStatus)
-def get_job_status(job_id: str, db: Session = Depends(get_db)):
-    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return JobStatus(
-        id=job.id,
-        filename=job.filename,
-        status=job.status,
-        error_message=job.error_message,
-        subject=job.subject,
-        sender=job.sender,
-        reply_to=job.reply_to,
-        return_path=job.return_path,
-        to_address=job.to_address,
-        date=job.date,
-        message_id=job.message_id,
-        link_count=len(job.links),
-        created_at=job.created_at,
-        updated_at=job.updated_at,
+def _service_flags() -> ServiceFlags:
+    return ServiceFlags(
+        vt_enabled=settings.enable_virustotal and bool(settings.virustotal_api_key),
+        urlscan_enabled=settings.enable_urlscan and bool(settings.urlscan_api_key),
+        llm_enabled=settings.enable_llm and bool(settings.openai_api_key),
     )
 
 
-@app.get("/api/jobs/{job_id}/result", response_model=JobResult)
-def get_job_result(job_id: str, db: Session = Depends(get_db)):
-    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
-    if not job:
-        raise HTTPException(404, "Job not found")
+def _job_service_flags(job: AnalysisJob) -> ServiceFlags:
+    return ServiceFlags(
+        vt_enabled=bool(job.vt_enabled),
+        urlscan_enabled=bool(job.urlscan_enabled),
+        llm_enabled=bool(job.llm_enabled),
+    )
 
+
+def _build_links(job: AnalysisJob) -> list[LinkDetail]:
     links_out: list[LinkDetail] = []
     for link in job.links:
         checks = [
@@ -133,30 +88,118 @@ def get_job_result(job_id: str, db: Session = Depends(get_db)):
                 checks=checks,
             )
         )
+    return links_out
 
-    assessment = None
-    if job.assessment:
-        a = job.assessment
-        assessment = AssessmentResult(
-            classification=a.classification,
-            risk_score=a.risk_score,
-            confidence=a.confidence,
-            recommended_action=a.recommended_action,
-            rationale=a.rationale,
-            evidence=json.loads(a.evidence) if a.evidence else [],
-            analyst_summary=a.analyst_summary,
-        )
 
-    header_findings = []
-    if job.header_findings:
-        for hf in json.loads(job.header_findings):
-            header_findings.append(HeaderFinding(**hf))
+def _build_assessment(job: AnalysisJob) -> AssessmentResult | None:
+    if not job.assessment:
+        return None
+    a = job.assessment
+    return AssessmentResult(
+        source=a.source or "llm",
+        classification=a.classification,
+        risk_score=a.risk_score,
+        confidence=a.confidence,
+        recommended_action=a.recommended_action,
+        rationale=a.rationale,
+        evidence=json.loads(a.evidence) if a.evidence else [],
+        analyst_summary=a.analyst_summary,
+    )
+
+
+def _build_pre_scores(job: AnalysisJob) -> PreScores | None:
+    if job.phishing_score is None:
+        return None
+    return PreScores(
+        phishing_score=job.phishing_score or 0,
+        advertising_score=job.advertising_score or 0,
+        legitimacy_score=job.legitimacy_score or 0,
+        breakdown=json.loads(job.pre_score_details) if job.pre_score_details else {},
+    )
+
+
+def _build_header_findings(job: AnalysisJob) -> list[HeaderFinding]:
+    if not job.header_findings:
+        return []
+    return [HeaderFinding(**hf) for hf in json.loads(job.header_findings)]
+
+
+def _build_warnings(job: AnalysisJob) -> list[str]:
+    return json.loads(job.warnings) if job.warnings else []
+
+
+@app.get("/api/health", response_model=HealthResponse)
+def health():
+    return HealthResponse(services=_service_flags())
+
+
+@app.post("/api/upload", response_model=JobCreated)
+async def upload_email(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".eml", ".msg"):
+        raise HTTPException(400, "Only .eml and .msg files are supported")
+
+    content = await file.read()
+    if len(content) > MAX_BYTES:
+        raise HTTPException(413, f"File exceeds {settings.max_upload_size_mb} MB limit")
+
+    job = AnalysisJob(filename=file.filename, status="queued")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    tmp.write(content)
+    tmp.close()
+
+    background_tasks.add_task(run_analysis, job.id, tmp.name, ext)
+    logger.info("Created analysis job %s for %s", job.id, file.filename)
+    return JobCreated(job_id=job.id)
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobStatus)
+def get_job_status(job_id: str, db: Session = Depends(get_db)):
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return JobStatus(
+        id=job.id,
+        filename=job.filename,
+        status=job.status,
+        error_message=job.error_message,
+        warnings=_build_warnings(job),
+        subject=job.subject,
+        sender=job.sender,
+        reply_to=job.reply_to,
+        return_path=job.return_path,
+        to_address=job.to_address,
+        date=job.date,
+        message_id=job.message_id,
+        link_count=len(job.links),
+        services=_job_service_flags(job),
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
+@app.get("/api/jobs/{job_id}/result", response_model=JobResult)
+def get_job_result(job_id: str, db: Session = Depends(get_db)):
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
 
     return JobResult(
         id=job.id,
         filename=job.filename,
         status=job.status,
         error_message=job.error_message,
+        warnings=_build_warnings(job),
         subject=job.subject,
         sender=job.sender,
         reply_to=job.reply_to,
@@ -170,8 +213,43 @@ def get_job_result(job_id: str, db: Session = Depends(get_db)):
         structured_headers=json.loads(job.structured_headers) if job.structured_headers else None,
         body_text=job.body_text,
         attachment_metadata=json.loads(job.attachment_metadata) if job.attachment_metadata else [],
-        header_findings=header_findings,
-        links=links_out,
-        assessment=assessment,
+        header_findings=_build_header_findings(job),
+        pre_scores=_build_pre_scores(job),
+        links=_build_links(job),
+        assessment=_build_assessment(job),
+        services=_job_service_flags(job),
         created_at=job.created_at,
+    )
+
+
+@app.get("/api/jobs/{job_id}/export", response_model=ExportResult)
+def export_job(job_id: str, db: Session = Depends(get_db)):
+    """Export full structured analysis as JSON."""
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status not in ("completed", "completed_with_warnings"):
+        raise HTTPException(400, "Analysis not yet complete")
+
+    return ExportResult(
+        job_id=job.id,
+        filename=job.filename,
+        status=job.status,
+        warnings=_build_warnings(job),
+        email_metadata={
+            "sender": job.sender,
+            "reply_to": job.reply_to,
+            "return_path": job.return_path,
+            "to": job.to_address,
+            "subject": job.subject,
+            "date": job.date,
+            "message_id": job.message_id,
+            "authentication_results": job.authentication_results,
+        },
+        header_findings=_build_header_findings(job),
+        pre_scores=_build_pre_scores(job),
+        links=_build_links(job),
+        assessment=_build_assessment(job),
+        services=_job_service_flags(job),
+        analyzed_at=job.updated_at,
     )

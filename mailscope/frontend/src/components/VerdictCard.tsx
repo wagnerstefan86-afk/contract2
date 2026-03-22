@@ -33,11 +33,24 @@ function RiskGauge({ score }: { score: number }) {
   );
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  llm: "KI-Bewertung",
+  deterministic: "Deterministische Analyse",
+  fallback: "Fallback (KI nicht verfügbar)",
+};
+
 export default function VerdictCard({ assessment }: { assessment: Assessment }) {
   const cls = CLASS_CONFIG[assessment.classification || "unknown"] || CLASS_CONFIG.unknown;
 
   return (
     <div className={`rounded-xl border ${cls.border} ${cls.bg} p-6`}>
+      {assessment.source && assessment.source !== "llm" && (
+        <div className="mb-4 flex items-center gap-2">
+          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            {SOURCE_LABELS[assessment.source] || assessment.source}
+          </span>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Classification */}
         <div>
