@@ -109,8 +109,9 @@ async def _ensure_schema():
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decided_by_user_id UUID REFERENCES benutzer(id)",
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decided_at TIMESTAMP",
         "ALTER TABLE risikothemen ADD COLUMN IF NOT EXISTS decision_updated_at TIMESTAMP",
-        # -- analysen: pipeline evaluation data --
+        # -- analysen: pipeline evaluation data & error details --
         "ALTER TABLE analysen ADD COLUMN IF NOT EXISTS auswertung JSONB",
+        "ALTER TABLE analysen ADD COLUMN IF NOT EXISTS fehler_details JSONB",
     ]
     async with engine.begin() as conn:
         for stmt in stmts:
