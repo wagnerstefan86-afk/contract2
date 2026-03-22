@@ -18,7 +18,8 @@ const farbe = computed(() => {
   if (s === "Teilweise abgeschlossen" || s === "Partial") return "#ea580c";
   if (s === "Offen" || s === "Hochgeladen" || s === "Gestartet") return "#6366f1";
   if (s === "Zurückgestellt" || s === "Archiviert") return "#6b7280";
-  if (s.includes("läuft") || s === "Konsolidierung" || s === "In Analyse") return "#2563eb";
+  if (s.includes("läuft") || s === "Konsolidierung" || s === "In Analyse"
+      || s === "Risiko-Erstprüfung" || s === "Tiefenprüfung") return "#2563eb";
   return "#6b7280";
 });
 </script>

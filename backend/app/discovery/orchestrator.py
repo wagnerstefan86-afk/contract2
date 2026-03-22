@@ -1,7 +1,13 @@
-"""Discovery orchestrator: runs the full multi-pass pipeline.
+"""Discovery orchestrator: 2-stage pipeline (universal risk read + deep checks).
 
-Reads contract text, segments it, runs passes sequentially, consolidates,
-and persists findings + protocol entries + evaluation data to the database.
+Architecture:
+  A. Text extraction + clause-aware segmentation
+  B. Universal risk read — every clause read once, strict problem screen
+  C. Hard filter — drop non-problematic clauses
+  D. Domain deep checks — only for flagged clauses
+  E. Dedup / merge / consolidation
+  F. Theme building (clustering)
+  G. Editorial / negotiation generation
 """
 
 from __future__ import annotations
@@ -22,10 +28,12 @@ from app.models.protokoll import Protokoll, ProtokollEbene
 from app.services.extraktion import extrahiere_mit_seitenmap
 from app.discovery.chunking import text_in_absaetze, absaetze_zu_segmente
 from app.discovery.llm_client import lade_llm_config, LLMConfig
-from app.discovery.passes.breit import BreitPass
-from app.discovery.passes.perspektive import PerspektivePass
-from app.discovery.passes.implizit import ImplizitPass
-from app.discovery.passes.bankregulatorik import BankregulatorikPass
+from app.discovery.passes.risk_screen import (
+    run_risk_screen, filter_problematic, ClauseScreenResult,
+)
+from app.discovery.passes.deep_checks import (
+    run_deep_checks, merge_deep_checks_into_findings,
+)
 from app.discovery.passes.themen_cluster import (
     clustere_findings, resolve_topic_fundstellen,
     berechne_clustering_metriken, berechne_titel_aehnlichkeit,
@@ -160,15 +168,33 @@ def _user_facing_error(e: Exception) -> str:
 
 async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                         perspective: str = "provider") -> None:
-    """Inner pipeline logic with full observability."""
+    """2-stage pipeline: universal risk read → selective deep checks.
+
+    Stages:
+      1. Text extraction
+      2. Clause-aware segmentation
+      3. Universal risk read (every clause, once)
+      4. Hard filter (drop non-problematic)
+      5. Domain deep checks (only flagged clauses)
+      6. Dedup / consolidation
+      7. Topic clustering
+      8. Editorial / negotiation generation
+      9. Persist + finalize
+    """
 
     vid = vertrag.id
     aid = analyse.id
     pipeline_start = time.monotonic()
 
     # Accumulates evaluation data for the auswertung field
-    auswertung: dict = {"passes": {}, "segmente": {}, "konsolidierung": {}, "zeiten": {}}
+    auswertung: dict = {"stages": {}, "segmente": {}, "konsolidierung": {}, "zeiten": {}}
     auswertung["perspective"] = perspective
+    auswertung["pipeline_version"] = "v2_two_stage"
+
+    # Deterministic step outcome tracking
+    total_steps = 4  # risk_screen + deep_checks + clustering + editorial
+    successful_steps = 0
+    failed_steps: list[dict] = []
 
     # --- Step 1: Text extraction ---
     await _update_analyse(db, analyse, AnalyseStatus.GESTARTET.value, "Textextraktion", 5)
@@ -225,6 +251,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             "provider": llm_config.provider,
             "model": llm_config.model,
             "base_url": llm_config.base_url,
+            "pipeline_version": "v2_two_stage",
         }
         await _log(db, aid, vid,
                    f"LLM-Konfiguration geladen: {llm_config.provider}/{llm_config.model}")
@@ -235,118 +262,64 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     vertrag.status = VertragStatus.IN_ANALYSE.value
     await db.commit()
 
-    # --- Step 4: Discovery passes ---
-    all_raw_findings: list[RawFinding] = []
-    # Raw findings per pass for debugging/evaluation (serialized to auswertung)
-    roh_kandidaten_pro_pass: dict[str, list[dict]] = {}
-    # Deterministic step outcome tracking
-    total_steps = 6  # 4 passes + clustering + editorial
-    successful_steps = 0
-    failed_steps: list[dict] = []
+    # ===================================================================
+    # STAGE B: Universal Risk Read — every clause, once
+    # ===================================================================
+    await _update_analyse(db, analyse, AnalyseStatus.RISK_SCREEN.value,
+                          "Risiko-Erstprüfung", 15)
+    await _log(db, aid, vid,
+               f"Risiko-Erstprüfung gestartet: {len(segments)} Segmente.")
+    await db.commit()
 
-    # --- Helper to run a single pass with error isolation ---
-    async def _run_pass(
-        pass_obj, pass_name: str, pass_key: str,
-        status: str, progress: int,
-    ) -> tuple[list[RawFinding], float]:
-        """Run a discovery pass, returning findings and duration.
-
-        On failure: logs the error, records it in failed_steps, returns empty list.
-        The pipeline continues with the next pass.
-        """
-        nonlocal successful_steps
-        await _update_analyse(db, analyse, status, pass_name, progress)
-        await _log(db, aid, vid, f"{pass_name} gestartet.")
-        await db.commit()
-
-        t = time.monotonic()
-        try:
-            findings = await pass_obj.run(segments, llm_config, full_text, perspective=perspective)
-            dur = round(time.monotonic() - t, 1)
-
-            cats = Counter(f.kategorie for f in findings)
-            auswertung["passes"][pass_key] = {
-                "kandidaten": len(findings),
-                "dauer_sekunden": dur,
-                "kategorien": dict(cats),
-                "status": "ok",
-            }
-            successful_steps += 1
-
-            await _log(db, aid, vid,
-                       f"{pass_name} abgeschlossen: {len(findings)} Kandidaten in {dur}s.",
-                       details=auswertung["passes"][pass_key])
-            await db.commit()
-            return findings, dur
-
-        except Exception as e:
-            dur = round(time.monotonic() - t, 1)
-            logger.error(f"{pass_name} fehlgeschlagen: {e}", exc_info=True)
-            error_info = {
-                "step": pass_key,
-                "error_type": type(e).__name__,
-                "message": str(e),
-            }
-            failed_steps.append(error_info)
-            auswertung["passes"][pass_key] = {
-                "kandidaten": 0,
-                "dauer_sekunden": dur,
-                "status": "failed",
-                "error": str(e),
-            }
-            await _log(db, aid, vid,
-                       f"{pass_name} fehlgeschlagen: {type(e).__name__}. "
-                       f"Schritt fehlgeschlagen, versuche verbleibende Schritte.",
-                       ebene=ProtokollEbene.WARNUNG.value,
-                       details=error_info)
-            await db.commit()
-            return [], dur
-
-    # Pass 1: Breite Ersterfassung
-    findings_p1, dur_p1 = await _run_pass(
-        BreitPass(), "Pass 1: Breite Ersterfassung", "pass1_breit",
-        AnalyseStatus.PASS_1.value, 15,
-    )
-    roh_kandidaten_pro_pass["Pass 1: Breite Ersterfassung"] = [
-        _raw_finding_to_dict(f) for f in findings_p1
-    ]
-    all_raw_findings.extend(findings_p1)
-
-    # Pass 2: Perspektivische Vertiefung
-    findings_p2, dur_p2 = await _run_pass(
-        PerspektivePass(), "Pass 2: Perspektivische Vertiefung", "pass2_perspektive",
-        AnalyseStatus.PASS_2.value, 35,
-    )
-    for f in findings_p2:
-        pass_key_2 = f.quelle_pass or "Pass 2: Unbekannt"
-        roh_kandidaten_pro_pass.setdefault(pass_key_2, []).append(
-            _raw_finding_to_dict(f)
+    t0 = time.monotonic()
+    screen_results: list[ClauseScreenResult] = []
+    try:
+        screen_results = await run_risk_screen(
+            segments, llm_config, full_text, perspective=perspective,
         )
-    all_raw_findings.extend(findings_p2)
+        dur_screen = round(time.monotonic() - t0, 1)
+        successful_steps += 1
+    except Exception as e:
+        dur_screen = round(time.monotonic() - t0, 1)
+        logger.error(f"Risiko-Erstprüfung fehlgeschlagen: {e}", exc_info=True)
+        failed_steps.append({
+            "step": "risk_screen",
+            "error_type": type(e).__name__,
+            "message": str(e),
+        })
 
-    # Pass 3: Implizite Pflichten
-    findings_p3, dur_p3 = await _run_pass(
-        ImplizitPass(), "Pass 3: Implizite Pflichten", "pass3_implizit",
-        AnalyseStatus.PASS_3.value, 60,
-    )
-    roh_kandidaten_pro_pass["Pass 3: Implizite Pflichten"] = [
-        _raw_finding_to_dict(f) for f in findings_p3
-    ]
-    all_raw_findings.extend(findings_p3)
+    # STAGE C: Hard filter — drop non-problematic
+    problematic, dropped = filter_problematic(screen_results)
 
-    # Pass 4: Bankregulatorik
-    findings_p4, dur_p4 = await _run_pass(
-        BankregulatorikPass(), "Pass 4: Bankregulatorik", "pass4_bankregulatorik",
-        AnalyseStatus.PASS_4.value, 75,
-    )
-    roh_kandidaten_pro_pass["Pass 4: Bankregulatorik"] = [
-        _raw_finding_to_dict(f) for f in findings_p4
-    ]
-    all_raw_findings.extend(findings_p4)
+    # Collect screen metrics
+    problem_type_counts: dict[str, int] = {}
+    domain_counts: dict[str, int] = {}
+    for r in problematic:
+        for pt in r.problem_types:
+            problem_type_counts[pt] = problem_type_counts.get(pt, 0) + 1
+        for td in r.trigger_domains:
+            domain_counts[td] = domain_counts.get(td, 0) + 1
 
-    # If ALL passes failed and we have zero findings, finalize and raise PipelineFailure
-    if not all_raw_findings and failed_steps:
-        # Store structured data before raising so the outer handler has full context
+    auswertung["stages"]["risk_screen"] = {
+        "total_clauses_read": len(screen_results),
+        "clauses_flagged_problematic": len(problematic),
+        "clauses_dropped_non_problematic": len(dropped),
+        "dauer_sekunden": dur_screen,
+        "counts_by_problem_type": problem_type_counts,
+        "counts_by_trigger_domain": domain_counts,
+        "status": "ok" if screen_results else "failed",
+    }
+
+    await _log(db, aid, vid,
+               f"Risiko-Erstprüfung abgeschlossen in {dur_screen}s: "
+               f"{len(problematic)} problematisch, "
+               f"{len(dropped)} nicht-problematisch verworfen "
+               f"(von {len(screen_results)} Segmenten).",
+               details=auswertung["stages"]["risk_screen"])
+    await db.commit()
+
+    # If risk screen produced nothing at all, abort early
+    if not screen_results and failed_steps:
         from app.discovery.llm_client import get_throttle as _get_throttle
         _throttle_stats = _get_throttle(llm_config).stats
         analyse.auswertung = auswertung
@@ -362,11 +335,97 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         }
         await db.flush()
         raise PipelineFailure(
-            f"Alle {len(failed_steps)} Analyse-Passes fehlgeschlagen. "
-            f"Keine Ergebnisse verfügbar."
+            f"Risiko-Erstprüfung fehlgeschlagen. Keine Ergebnisse verfügbar."
         )
 
-    # --- Step 4a: Early semantic deduplication ---
+    # ===================================================================
+    # STAGE D: Domain deep checks — only for flagged clauses
+    # ===================================================================
+    all_raw_findings: list[RawFinding] = []
+    deep_check_results = {}
+
+    clauses_needing_deep = [c for c in problematic if c.needs_deep_check]
+    deep_checks_run_total = 0
+
+    if clauses_needing_deep:
+        await _update_analyse(db, analyse, AnalyseStatus.DEEP_CHECKS.value,
+                              "Tiefenprüfung", 40)
+        await _log(db, aid, vid,
+                   f"Tiefenprüfung gestartet: {len(clauses_needing_deep)} Klauseln "
+                   f"mit {sum(len(c.deep_check_domains) for c in clauses_needing_deep)} Domain-Checks.")
+        await db.commit()
+
+        t0 = time.monotonic()
+        try:
+            deep_check_results = await run_deep_checks(clauses_needing_deep, llm_config)
+            dur_deep = round(time.monotonic() - t0, 1)
+            deep_checks_run_total = sum(len(v) for v in deep_check_results.values())
+            successful_steps += 1
+        except Exception as e:
+            dur_deep = round(time.monotonic() - t0, 1)
+            logger.error(f"Tiefenprüfung fehlgeschlagen: {e}", exc_info=True)
+            failed_steps.append({
+                "step": "deep_checks",
+                "error_type": type(e).__name__,
+                "message": str(e),
+            })
+
+        auswertung["stages"]["deep_checks"] = {
+            "clauses_checked": len(clauses_needing_deep),
+            "deep_checks_run_total": deep_checks_run_total,
+            "dauer_sekunden": dur_deep,
+            "status": "ok" if deep_check_results else "failed",
+        }
+
+        await _log(db, aid, vid,
+                   f"Tiefenprüfung abgeschlossen in {dur_deep}s: "
+                   f"{deep_checks_run_total} Domain-Checks für "
+                   f"{len(clauses_needing_deep)} Klauseln.",
+                   details=auswertung["stages"]["deep_checks"])
+        await db.commit()
+    else:
+        auswertung["stages"]["deep_checks"] = {
+            "clauses_checked": 0,
+            "deep_checks_run_total": 0,
+            "dauer_sekunden": 0,
+            "status": "skipped",
+        }
+
+    # Merge first-read + deep checks into RawFindings
+    all_raw_findings = merge_deep_checks_into_findings(problematic, deep_check_results)
+
+    # If no problematic findings and no error, it just means the contract is clean
+    if not all_raw_findings:
+        if failed_steps:
+            from app.discovery.llm_client import get_throttle as _get_throttle
+            _throttle_stats = _get_throttle(llm_config).stats
+            analyse.auswertung = auswertung
+            analyse.fehler = (
+                "Alle Verarbeitungsschritte sind fehlgeschlagen "
+                f"(z.B. {failed_steps[0]['error_type']})."
+            )
+            analyse.fehler_details = {
+                "successful_steps": 0,
+                "failed_steps": failed_steps,
+                "rate_limit_hits": _throttle_stats.get("rate_limit_hits", 0),
+                "total_retries": _throttle_stats.get("total_retries", 0),
+            }
+            await db.flush()
+            raise PipelineFailure(
+                f"Risiko-Erstprüfung fehlgeschlagen. Keine Ergebnisse verfügbar."
+            )
+        # Contract is genuinely clean — no problems found
+        logger.info("Keine problematischen Klauseln gefunden — Vertrag ist sauber.")
+
+    await _log(db, aid, vid,
+               f"Risiko-Screening: {len(all_raw_findings)} Rohfunde aus "
+               f"{len(problematic)} problematischen Klauseln.")
+    await db.commit()
+
+    # ===================================================================
+    # STAGE E: Dedup / merge / consolidation
+    # ===================================================================
+    # --- Early semantic deduplication ---
     t0 = time.monotonic()
     dedup_result = deduplicate_raw_findings(all_raw_findings)
     dur_dedup = round(time.monotonic() - t0, 1)
@@ -433,7 +492,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     await _update_analyse(db, analyse, AnalyseStatus.KONSOLIDIERUNG.value, "Konsolidierung", 92)
     total_raw = len(all_raw_findings)
     await _log(db, aid, vid,
-               f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus 4 Passes.")
+               f"Konsolidierung gestartet: {total_raw} Gesamtkandidaten aus Risiko-Screening.")
     await db.commit()
 
     t0 = time.monotonic()
@@ -473,15 +532,12 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
         "quellen_verteilung": source_pass_dist,
     }
     auswertung["zeiten"] = {
-        "pass1_sekunden": dur_p1,
-        "pass2_sekunden": dur_p2,
-        "pass3_sekunden": dur_p3,
-        "pass4_sekunden": dur_p4,
+        "risk_screen_sekunden": dur_screen,
+        "deep_checks_sekunden": auswertung["stages"].get("deep_checks", {}).get("dauer_sekunden", 0),
         "dedup_sekunden": dur_dedup,
         "clustering_sekunden": dur_cluster,
         "konsolidierung_sekunden": dur_cons,
     }
-    auswertung["roh_kandidaten"] = roh_kandidaten_pro_pass
 
     await _log(db, aid, vid,
                f"Konsolidierung abgeschlossen: {len(consolidated)} Fundstellen "
@@ -944,12 +1000,26 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     except NameError:
         pass
 
+    # Pipeline metrics (new 2-stage architecture)
+    screen_stage = auswertung["stages"].get("risk_screen", {})
+    deep_stage = auswertung["stages"].get("deep_checks", {})
     analysis_stats = {
+        "pipeline_version": "v2_two_stage",
         "perspective": perspective,
-        "raw_findings": dedup_result.raw_before,
-        "after_pass_dedup": dedup_result.after_pass_dedup,
-        "after_cross_dedup": dedup_result.after_cross_dedup,
+        # Stage B metrics
+        "total_clauses_read": screen_stage.get("total_clauses_read", 0),
+        "clauses_flagged_problematic": screen_stage.get("clauses_flagged_problematic", 0),
+        "clauses_dropped_non_problematic": screen_stage.get("clauses_dropped_non_problematic", 0),
+        "counts_by_problem_type": screen_stage.get("counts_by_problem_type", {}),
+        "counts_by_trigger_domain": screen_stage.get("counts_by_trigger_domain", {}),
+        # Stage D metrics
+        "deep_checks_run_total": deep_stage.get("deep_checks_run_total", 0),
+        # Dedup / consolidation metrics
+        "problems_after_dedup": dedup_result.raw_after,
         "after_consolidation": len(consolidated),
+        # Theme metrics
+        "themes_before_editorial": len(topic_clusters) if topic_clusters else 0,
+        "themes_after_editorial": kernthemen_count,
         "clusters": len(topic_clusters) if topic_clusters else 0,
         "kernthemen": kernthemen_count,
         "evidence_count": evidence_count,

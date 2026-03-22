@@ -12,6 +12,10 @@ import enum
 
 class AnalyseStatus(str, enum.Enum):
     GESTARTET = "Gestartet"
+    # New 2-stage pipeline
+    RISK_SCREEN = "Risiko-Erstprüfung"
+    DEEP_CHECKS = "Tiefenprüfung"
+    # Legacy pass statuses (kept for backward compatibility with existing DB records)
     PASS_1 = "Pass 1 läuft"
     PASS_2 = "Pass 2 läuft"
     PASS_3 = "Pass 3 läuft"
