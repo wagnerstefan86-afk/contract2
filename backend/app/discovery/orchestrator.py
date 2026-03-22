@@ -40,6 +40,15 @@ from app.models.risikothema import RisikoThema, risikothema_fundstellen
 logger = logging.getLogger(__name__)
 
 
+class PipelineFailure(Exception):
+    """Raised when the entire pipeline fails (zero successful steps).
+
+    Not a generic RuntimeError — only raised when no pass produced results,
+    so the caller can handle total-failure distinctly from partial success.
+    """
+    pass
+
+
 async def _log(db: AsyncSession, analyse_id: uuid.UUID, vertrag_id: uuid.UUID,
                nachricht: str, ebene: str = ProtokollEbene.INFO.value,
                details: dict | None = None) -> None:
@@ -90,6 +99,26 @@ async def run_discovery(analyse_id: uuid.UUID, db: AsyncSession,
 
     try:
         await _run_pipeline(db, analyse, vertrag, perspective=perspective)
+    except PipelineFailure as e:
+        # Expected total-failure — all passes failed, status already set inside pipeline
+        # Log clearly but without full stacktrace (this is not an unexpected crash)
+        logger.error(f"Pipeline: alle Schritte fehlgeschlagen – {e}")
+        # fehler/fehler_details already set by the deterministic logic inside _run_pipeline
+        # Only set them here as fallback if pipeline raised before finalization
+        if not analyse.fehler:
+            analyse.fehler = _user_facing_error(e)
+        if not analyse.fehler_details:
+            analyse.fehler_details = {
+                "error_type": "PipelineFailure",
+                "raw_message": str(e),
+            }
+        analyse.status = AnalyseStatus.FEHLGESCHLAGEN.value
+        analyse.beendet_am = datetime.utcnow()
+        await _log(db, analyse.id, vertrag.id,
+                   f"Pipeline fehlgeschlagen: alle Schritte gescheitert",
+                   ebene=ProtokollEbene.FEHLER.value,
+                   details=analyse.fehler_details)
+        await db.commit()
     except Exception as e:
         logger.exception(f"Discovery-Pipeline fehlgeschlagen: {e}")
         analyse.status = AnalyseStatus.FEHLGESCHLAGEN.value
@@ -210,8 +239,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     all_raw_findings: list[RawFinding] = []
     # Raw findings per pass for debugging/evaluation (serialized to auswertung)
     roh_kandidaten_pro_pass: dict[str, list[dict]] = {}
-    # Track pass failures for partial success determination
-    pass_errors: list[dict] = []
+    # Deterministic step outcome tracking
+    total_steps = 6  # 4 passes + clustering + editorial
+    successful_steps = 0
+    failed_steps: list[dict] = []
 
     # --- Helper to run a single pass with error isolation ---
     async def _run_pass(
@@ -220,9 +251,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     ) -> tuple[list[RawFinding], float]:
         """Run a discovery pass, returning findings and duration.
 
-        On failure: logs the error, records it in pass_errors, returns empty list.
+        On failure: logs the error, records it in failed_steps, returns empty list.
         The pipeline continues with the next pass.
         """
+        nonlocal successful_steps
         await _update_analyse(db, analyse, status, pass_name, progress)
         await _log(db, aid, vid, f"{pass_name} gestartet.")
         await db.commit()
@@ -239,6 +271,7 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                 "kategorien": dict(cats),
                 "status": "ok",
             }
+            successful_steps += 1
 
             await _log(db, aid, vid,
                        f"{pass_name} abgeschlossen: {len(findings)} Kandidaten in {dur}s.",
@@ -250,11 +283,11 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             dur = round(time.monotonic() - t, 1)
             logger.error(f"{pass_name} fehlgeschlagen: {e}", exc_info=True)
             error_info = {
-                "pass": pass_name,
+                "step": pass_key,
                 "error_type": type(e).__name__,
                 "message": str(e),
             }
-            pass_errors.append(error_info)
+            failed_steps.append(error_info)
             auswertung["passes"][pass_key] = {
                 "kandidaten": 0,
                 "dauer_sekunden": dur,
@@ -262,7 +295,8 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                 "error": str(e),
             }
             await _log(db, aid, vid,
-                       f"{pass_name} fehlgeschlagen: {type(e).__name__}. Pipeline fährt fort.",
+                       f"{pass_name} fehlgeschlagen: {type(e).__name__}. "
+                       f"Schritt fehlgeschlagen, versuche verbleibende Schritte.",
                        ebene=ProtokollEbene.WARNUNG.value,
                        details=error_info)
             await db.commit()
@@ -310,13 +344,27 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     ]
     all_raw_findings.extend(findings_p4)
 
-    # If ALL passes failed and we have zero findings, abort
-    if not all_raw_findings:
-        if pass_errors:
-            raise RuntimeError(
-                f"Alle {len(pass_errors)} Analyse-Passes fehlgeschlagen. "
-                f"Keine Ergebnisse verfügbar."
-            )
+    # If ALL passes failed and we have zero findings, finalize and raise PipelineFailure
+    if not all_raw_findings and failed_steps:
+        # Store structured data before raising so the outer handler has full context
+        from app.discovery.llm_client import get_throttle as _get_throttle
+        _throttle_stats = _get_throttle(llm_config).stats
+        analyse.auswertung = auswertung
+        analyse.fehler = (
+            "Alle Verarbeitungsschritte sind fehlgeschlagen "
+            f"(z.B. {failed_steps[0]['error_type']})."
+        )
+        analyse.fehler_details = {
+            "successful_steps": 0,
+            "failed_steps": failed_steps,
+            "rate_limit_hits": _throttle_stats.get("rate_limit_hits", 0),
+            "total_retries": _throttle_stats.get("total_retries", 0),
+        }
+        await db.flush()
+        raise PipelineFailure(
+            f"Alle {len(failed_steps)} Analyse-Passes fehlgeschlagen. "
+            f"Keine Ergebnisse verfügbar."
+        )
 
     # --- Step 4a: Early semantic deduplication ---
     t0 = time.monotonic()
@@ -355,12 +403,14 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     except Exception as e:
         dur_cluster = round(time.monotonic() - t0, 1)
         logger.error(f"Topic Clustering fehlgeschlagen: {e}", exc_info=True)
-        pass_errors.append({"pass": "Clustering", "error_type": type(e).__name__, "message": str(e)})
+        failed_steps.append({"step": "clustering", "error_type": type(e).__name__, "message": str(e)})
         await _log(db, aid, vid,
-                   f"Topic Clustering fehlgeschlagen: {type(e).__name__}. Pipeline fährt fort.",
+                   f"Topic Clustering fehlgeschlagen: {type(e).__name__}. "
+                   f"Schritt fehlgeschlagen, versuche verbleibende Schritte.",
                    ebene=ProtokollEbene.WARNUNG.value)
 
     if topic_clusters:
+        successful_steps += 1
         auswertung["clustering"] = {
             "themen_anzahl": len(topic_clusters),
             "dauer_sekunden": dur_cluster,
@@ -663,9 +713,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
             )
         except Exception as e:
             logger.error(f"Final Editorial Pass fehlgeschlagen: {e}", exc_info=True)
-            pass_errors.append({"pass": "Editorial", "error_type": type(e).__name__, "message": str(e)})
+            failed_steps.append({"step": "editorial", "error_type": type(e).__name__, "message": str(e)})
             await _log(db, aid, vid,
-                       f"Final Editorial Pass fehlgeschlagen: {type(e).__name__}. Themen bleiben ohne Editorial.",
+                       f"Final Editorial Pass fehlgeschlagen: {type(e).__name__}. "
+                       f"Schritt fehlgeschlagen, Themen bleiben ohne Editorial.",
                        ebene=ProtokollEbene.WARNUNG.value)
         dur_editorial = round(time.monotonic() - t0, 1)
 
@@ -781,9 +832,10 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
                 ],
             }
             auswertung["zeiten"]["editorial_sekunden"] = dur_editorial
+            successful_steps += 1
 
             await _log(db, aid, vid,
-                       f"Final Editorial Pass abgeschlossen: {anzahl_finale} finale Themen "
+                       f"Final Editorial Pass abgeschlossen: {anzahl_finale} finale Themen"
                        f"aus {len(persisted_themen)} Cluster-Themen in {dur_editorial}s. "
                        f"{anzahl_verworfen} Themen verworfen.",
                        details=auswertung["final_editorial"])
@@ -802,9 +854,14 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     total_duration = round(time.monotonic() - pipeline_start, 1)
     auswertung["zeiten"]["gesamt_sekunden"] = total_duration
 
-    # Record pass errors in auswertung for debug
-    if pass_errors:
-        auswertung["pass_errors"] = pass_errors
+    # Record failed steps in auswertung for debug
+    if failed_steps:
+        auswertung["failed_steps"] = failed_steps
+    auswertung["step_summary"] = {
+        "successful": successful_steps,
+        "failed": len(failed_steps),
+        "total": total_steps,
+    }
 
     # Record LLM throttle stats
     from app.discovery.llm_client import get_throttle
@@ -812,14 +869,32 @@ async def _run_pipeline(db: AsyncSession, analyse: Analyse, vertrag: Vertrag,
     auswertung["llm_stats"] = throttle_stats
 
     analyse.auswertung = auswertung
-    # Determine final status: partial if some passes failed but we have results
-    if pass_errors and all_raw_findings:
+
+    # --- Deterministic final status decision ---
+    if successful_steps == 0:
+        analyse.status = AnalyseStatus.FEHLGESCHLAGEN.value
+        analyse.fehler = (
+            "Alle Verarbeitungsschritte sind fehlgeschlagen "
+            f"(z.B. {failed_steps[0]['error_type'] if failed_steps else 'Unbekannt'})."
+        )
+        analyse.fehler_details = {
+            "successful_steps": successful_steps,
+            "failed_steps": failed_steps,
+            "rate_limit_hits": throttle_stats.get("rate_limit_hits", 0),
+            "total_retries": throttle_stats.get("total_retries", 0),
+        }
+    elif successful_steps < total_steps:
         analyse.status = AnalyseStatus.TEILWEISE_ABGESCHLOSSEN.value
         analyse.fehler = (
-            f"{len(pass_errors)} Analyse-Schritt(e) fehlgeschlagen. "
-            f"Ergebnisse basieren auf den erfolgreichen Schritten."
+            f"{len(failed_steps)} Analyse-Schritt(e) fehlgeschlagen. "
+            f"Ergebnisse basieren auf den {successful_steps} erfolgreichen Schritten."
         )
-        analyse.fehler_details = {"pass_errors": pass_errors}
+        analyse.fehler_details = {
+            "successful_steps": successful_steps,
+            "failed_steps": failed_steps,
+            "rate_limit_hits": throttle_stats.get("rate_limit_hits", 0),
+            "total_retries": throttle_stats.get("total_retries", 0),
+        }
     else:
         analyse.status = AnalyseStatus.ABGESCHLOSSEN.value
     analyse.aktueller_pass = None
